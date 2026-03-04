@@ -127,6 +127,7 @@ const Index = () => {
 
   const clearGrid = useCallback(() => {
     setGrid(createEmptyGrid());
+    setAgents([]);
   }, []);
 
   const randomize = useCallback(() => {

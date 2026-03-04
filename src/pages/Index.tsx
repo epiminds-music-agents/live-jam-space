@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, Square, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import AgentPanel, { type ActiveAgent } from "@/components/AgentPanel";
+import AgentPanel, { type ActiveAgent, PERSONALITIES } from "@/components/AgentPanel";
+import { useSync, type SyncableAgent } from "@/hooks/useSync";
 
 const STEPS = 16;
 const ROWS = 6;
@@ -15,6 +16,17 @@ type Grid = boolean[][];
 
 const createEmptyGrid = (): Grid =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
+
+function syncableToActiveAgent(sa: SyncableAgent): ActiveAgent {
+  const personality =
+    PERSONALITIES.find((p) => p.name === sa.personalityName) ?? {
+      name: sa.personalityName,
+      color: sa.color,
+      description: sa.description,
+      pattern: () => sa.pattern,
+    };
+  return { id: sa.id, personality, pattern: sa.pattern };
+}
 
 const Index = () => {
   const [grid, setGrid] = useState<Grid>(createEmptyGrid);
@@ -62,14 +74,6 @@ const Index = () => {
       synthRef.current = synth;
     }
   }, [volume]);
-
-  const toggleCell = useCallback((row: number, col: number) => {
-    setGrid((prev) => {
-      const next = prev.map((r) => [...r]);
-      next[row][col] = !next[row][col];
-      return next;
-    });
-  }, []);
 
   const startSequencer = useCallback(async () => {
     await initAudio();
@@ -125,28 +129,137 @@ const Index = () => {
     }
   }, [volume, isMuted]);
 
+  // ── Sync ──────────────────────────────────────────────────────────────────
+
+  const { send, connectedUsers } = useSync({
+    onInit(state) {
+      setGrid(state.grid.map((r) => [...r]));
+      setAgents(state.agents.map(syncableToActiveAgent));
+      setBpm(state.bpm);
+      setVolume(state.volume);
+      setIsMuted(state.isMuted);
+      if (state.isPlaying) startSequencer();
+    },
+    onCellToggle(row, step, value) {
+      setGrid((prev) => {
+        const next = prev.map((r) => [...r]);
+        next[row][step] = value;
+        return next;
+      });
+    },
+    onAgentAdd(sa) {
+      setAgents((prev) => [...prev, syncableToActiveAgent(sa)]);
+    },
+    onAgentRemove(id) {
+      setAgents((prev) => prev.filter((a) => a.id !== id));
+    },
+    onBpmChange(b) {
+      setBpm(b);
+    },
+    onVolumeChange(v) {
+      setVolume(v);
+    },
+    onMutedChange(m) {
+      setIsMuted(m);
+    },
+    onPlayStateChange(playing) {
+      if (playing) startSequencer();
+      else stopSequencer();
+    },
+    onGridRandomize(g) {
+      setGrid(g.map((r) => [...r]));
+    },
+    onGridClear() {
+      setGrid(createEmptyGrid());
+      setAgents([]);
+    },
+  });
+
+  // ── Actions (optimistic local + broadcast) ────────────────────────────────
+
+  const toggleCell = useCallback(
+    (row: number, col: number) => {
+      setGrid((prev) => {
+        const next = prev.map((r) => [...r]);
+        next[row][col] = !next[row][col];
+        return next;
+      });
+      send({ type: "cell_toggle", row, step: col });
+    },
+    [send]
+  );
+
+  const handlePlay = useCallback(async () => {
+    await startSequencer();
+    send({ type: "play_state", isPlaying: true });
+  }, [startSequencer, send]);
+
+  const handleStop = useCallback(() => {
+    stopSequencer();
+    send({ type: "play_state", isPlaying: false });
+  }, [stopSequencer, send]);
+
+  const handleBpm = useCallback(
+    (v: number) => {
+      setBpm(v);
+      send({ type: "bpm_change", bpm: v });
+    },
+    [send]
+  );
+
+  const handleVolume = useCallback(
+    (v: number) => {
+      setVolume(v);
+      send({ type: "volume_change", volume: v });
+    },
+    [send]
+  );
+
+  const handleMute = useCallback(() => {
+    setIsMuted((prev) => {
+      send({ type: "muted_change", isMuted: !prev });
+      return !prev;
+    });
+  }, [send]);
+
   const clearGrid = useCallback(() => {
     setGrid(createEmptyGrid());
     setAgents([]);
-  }, []);
+    send({ type: "grid_clear" });
+  }, [send]);
 
   const randomize = useCallback(() => {
-    setGrid(
-      Array.from({ length: ROWS }, () =>
-        Array.from({ length: STEPS }, () => Math.random() > 0.75)
-      )
+    const newGrid = Array.from({ length: ROWS }, () =>
+      Array.from({ length: STEPS }, () => Math.random() > 0.75)
     );
-  }, []);
+    setGrid(newGrid);
+    send({ type: "grid_randomize", grid: newGrid });
+  }, [send]);
 
-  const addAgent = useCallback((personality: ActiveAgent["personality"]) => {
-    const id = crypto.randomUUID();
-    const pattern = personality.pattern(ROWS, STEPS);
-    setAgents((prev) => [...prev, { id, personality, pattern }]);
-  }, []);
+  const addAgent = useCallback(
+    (personality: ActiveAgent["personality"]) => {
+      const id = crypto.randomUUID();
+      const pattern = personality.pattern(ROWS, STEPS);
+      setAgents((prev) => [...prev, { id, personality, pattern }]);
+      const sa: SyncableAgent = {
+        id,
+        personalityName: personality.name,
+        color: personality.color,
+        description: personality.description,
+        pattern,
+      };
+      send({ type: "agent_add", agent: sa });
+    },
+    [send]
+  );
 
-  const removeAgent = useCallback((id: string) => {
-    setAgents((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+  const removeAgent = useCallback(
+    (id: string) => {
+      setAgents((prev) => prev.filter((a) => a.id !== id));
+      send({ type: "agent_remove", id });
+    },
+    [send]
+  );
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -179,7 +292,7 @@ const Index = () => {
           className="flex flex-wrap items-center justify-center gap-3 mb-6"
         >
           <Button
-            onClick={isPlaying ? stopSequencer : startSequencer}
+            onClick={isPlaying ? handleStop : handlePlay}
             className="gap-2 font-bold tracking-wider border border-primary bg-primary/10 text-primary hover:bg-primary/20"
             size="lg"
           >
@@ -191,7 +304,7 @@ const Index = () => {
             <span className="text-xs text-muted-foreground w-8">BPM</span>
             <Slider
               value={[bpm]}
-              onValueChange={([v]) => setBpm(v)}
+              onValueChange={([v]) => handleBpm(v)}
               min={60}
               max={200}
               step={1}
@@ -201,12 +314,12 @@ const Index = () => {
           </div>
 
           <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
-            <button onClick={() => setIsMuted(!isMuted)} className="text-muted-foreground hover:text-primary">
+            <button onClick={handleMute} className="text-muted-foreground hover:text-primary">
               {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </button>
             <Slider
               value={[volume]}
-              onValueChange={([v]) => setVolume(v)}
+              onValueChange={([v]) => handleVolume(v)}
               min={-30}
               max={0}
               step={1}
@@ -241,7 +354,6 @@ const Index = () => {
                 {row.map((active, colIdx) => {
                   const isCurrentStep = currentStep === colIdx && isPlaying;
                   const isBeat = colIdx % 4 === 0;
-                  // Check if any agent activates this cell
                   const agentColor = !active
                     ? agents.find((a) => a.pattern[rowIdx]?.[colIdx])?.personality.color
                     : undefined;
@@ -322,11 +434,21 @@ const Index = () => {
           className="mt-3 flex items-center justify-between text-xs text-muted-foreground border border-border rounded px-4 py-2 bg-card/30"
         >
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <span>{agents.length + 1} agent{agents.length > 0 ? "s" : ""} connected</span>
+            <AnimatePresence mode="wait">
+              <motion.span
+                key={connectedUsers}
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 4 }}
+                className="flex items-center gap-2"
+              >
+                <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                <span>{connectedUsers} user{connectedUsers !== 1 ? "s" : ""} connected</span>
+              </motion.span>
+            </AnimatePresence>
           </div>
           <span className="tracking-widest" style={{ fontFamily: "Orbitron, monospace" }}>
-            LOCAL MODE
+            LIVE MODE
           </span>
         </motion.div>
       </div>

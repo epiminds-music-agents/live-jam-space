@@ -10,7 +10,7 @@ export type AgentPersonality = {
   pattern: (rows: number, steps: number) => boolean[][];
 };
 
-const PERSONALITIES: Omit<AgentPersonality, "id">[] = [
+export const PERSONALITIES: Omit<AgentPersonality, "id">[] = [
   {
     name: "PULSE",
     color: "hsl(180, 100%, 50%)",

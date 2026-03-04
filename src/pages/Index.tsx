@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, Square, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import AgentPanel, { type ActiveAgent } from "@/components/AgentPanel";
 
 const STEPS = 16;
 const ROWS = 6;
@@ -22,6 +23,7 @@ const Index = () => {
   const [bpm, setBpm] = useState(120);
   const [volume, setVolume] = useState(-6);
   const [isMuted, setIsMuted] = useState(false);
+  const [agents, setAgents] = useState<ActiveAgent[]>([]);
 
   const synthRef = useRef<Tone.PolySynth | null>(null);
   const sequenceRef = useRef<Tone.Sequence | null>(null);
@@ -30,6 +32,24 @@ const Index = () => {
   useEffect(() => {
     gridRef.current = grid;
   }, [grid]);
+
+  // Merge user grid with agent patterns
+  const mergedGrid = useCallback((): Grid => {
+    const base = grid.map((r) => [...r]);
+    agents.forEach((agent) => {
+      agent.pattern.forEach((row, ri) => {
+        row.forEach((cell, ci) => {
+          if (cell) base[ri][ci] = true;
+        });
+      });
+    });
+    return base;
+  }, [grid, agents]);
+
+  const mergedRef = useRef(mergedGrid());
+  useEffect(() => {
+    mergedRef.current = mergedGrid();
+  }, [mergedGrid]);
 
   const initAudio = useCallback(async () => {
     if (!synthRef.current) {
@@ -64,7 +84,7 @@ const Index = () => {
     const seq = new Tone.Sequence(
       (time, step) => {
         setCurrentStep(step);
-        const g = gridRef.current;
+        const g = mergedRef.current;
         const notes: string[] = [];
         for (let row = 0; row < ROWS; row++) {
           if (g[row][step]) notes.push(NOTE_NAMES[row]);
@@ -115,6 +135,16 @@ const Index = () => {
         Array.from({ length: STEPS }, () => Math.random() > 0.75)
       )
     );
+  }, []);
+
+  const addAgent = useCallback((personality: ActiveAgent["personality"]) => {
+    const id = crypto.randomUUID();
+    const pattern = personality.pattern(ROWS, STEPS);
+    setAgents((prev) => [...prev, { id, personality, pattern }]);
+  }, []);
+
+  const removeAgent = useCallback((id: string) => {
+    setAgents((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
   return (
@@ -210,6 +240,11 @@ const Index = () => {
                 {row.map((active, colIdx) => {
                   const isCurrentStep = currentStep === colIdx && isPlaying;
                   const isBeat = colIdx % 4 === 0;
+                  // Check if any agent activates this cell
+                  const agentColor = !active
+                    ? agents.find((a) => a.pattern[rowIdx]?.[colIdx])?.personality.color
+                    : undefined;
+                  const isAgentCell = !!agentColor;
                   return (
                     <button
                       key={colIdx}
@@ -218,13 +253,16 @@ const Index = () => {
                         flex-1 aspect-square rounded-sm transition-all duration-75 border
                         ${active
                           ? "bg-primary/80 border-primary grid-cell-active"
-                          : isBeat
-                            ? "bg-muted/60 border-border/60 hover:bg-muted"
-                            : "bg-muted/30 border-border/30 hover:bg-muted/50"
+                          : isAgentCell
+                            ? "border-current grid-cell-active"
+                            : isBeat
+                              ? "bg-muted/60 border-border/60 hover:bg-muted"
+                              : "bg-muted/30 border-border/30 hover:bg-muted/50"
                         }
-                        ${isCurrentStep && active ? "grid-cell-playing bg-secondary border-secondary" : ""}
-                        ${isCurrentStep && !active ? "border-secondary/40" : ""}
+                        ${isCurrentStep && (active || isAgentCell) ? "grid-cell-playing" : ""}
+                        ${isCurrentStep && !active && !isAgentCell ? "border-secondary/40" : ""}
                       `}
+                      style={isAgentCell && !active ? { backgroundColor: agentColor + "33", borderColor: agentColor, boxShadow: `0 0 8px ${agentColor}55` } : undefined}
                     />
                   );
                 })}
@@ -253,16 +291,38 @@ const Index = () => {
           </div>
         </motion.div>
 
-        {/* Agents / Status bar */}
+        {/* Agent Panel */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4 }}
+          className="mt-6 border border-border rounded-lg bg-card/30 p-4"
+        >
+          <h2
+            className="text-xs font-bold tracking-[0.3em] text-muted-foreground mb-3"
+            style={{ fontFamily: "Orbitron, monospace" }}
+          >
+            AGENTS
+          </h2>
+          <AgentPanel
+            agents={agents}
+            onAddAgent={addAgent}
+            onRemoveAgent={removeAgent}
+            rows={ROWS}
+            steps={STEPS}
+          />
+        </motion.div>
+
+        {/* Status bar */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.5 }}
-          className="mt-6 flex items-center justify-between text-xs text-muted-foreground border border-border rounded px-4 py-2 bg-card/30"
+          className="mt-3 flex items-center justify-between text-xs text-muted-foreground border border-border rounded px-4 py-2 bg-card/30"
         >
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <span>1 agent connected</span>
+            <span>{agents.length + 1} agent{agents.length > 0 ? "s" : ""} connected</span>
           </div>
           <span className="tracking-widest" style={{ fontFamily: "Orbitron, monospace" }}>
             LOCAL MODE

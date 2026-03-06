@@ -74,9 +74,10 @@ You are the **conductor**. You don't play notes — the AI musicians do that. Yo
 | **Play / Stop** | Start or pause the music |
 | **BPM slider** | How fast the music plays (beats per minute) |
 | **Volume** | How loud it is |
-| **Agent buttons** | Invite an AI musician to join the jam |
+| **Agent buttons** | Invite or remove an AI musician |
+| **Reset All** | Kick all agents, clear the grid and chat |
 
-When you click an agent button (like "PULSE"), the server wakes up that AI musician and it joins the session.
+When you click an agent button (like "PULSE"), the server wakes up that AI musician and it joins the session. Click the same button again (now showing "REMOVE PULSE") to kick it out — its grid cells are cleared and its rows are redistributed to the remaining agents.
 
 ---
 
@@ -106,27 +107,27 @@ Each agent can only play notes in its **assigned rows**. If there are 2 agents, 
 
 ## How Does an AI Musician Decide What to Play?
 
-This is the clever part. Each agent uses **Google Gemini** (an AI model, like ChatGPT but from Google) to make musical decisions.
+This is the clever part. Each agent uses **Gemini 2.0 Flash Lite** — Google's fastest, lowest-latency AI model — to make every musical decision. There are no hardcoded patterns or fallbacks. Every single note comes from the AI.
 
-But here's the trick — asking the AI for every single note would be too slow. Music moves fast. So instead:
+The agent sends the AI a compact snapshot of the full grid (all 6 rows, marking which rows belong to it), and asks for 8 moves at once. This "plan-ahead" strategy means the agent can play instantly while the AI thinks about the next batch in the background.
 
 ```mermaid
 sequenceDiagram
     participant Agent as AI Musician
-    participant Gemini as Google Gemini
+    participant Gemini as Gemini 2.0 Flash Lite
     participant Grid as Shared Grid
 
     Note over Agent: Music starts playing!
 
-    Agent->>Gemini: "Here's what the grid looks like.<br/>Here's what others are playing.<br/>Plan my next 8 moves."
-    Gemini-->>Agent: "Turn on row 5 step 0,<br/>then row 5 step 4,<br/>then row 5 step 8..." (8 moves)
+    Agent->>Gemini: "Here's the full grid.<br/>My rows are marked with *.<br/>Plan my next 8 moves."
+    Gemini-->>Agent: [8 cell toggles as JSON]
 
-    Note over Agent: Executes moves one by one<br/>(instant, no waiting)
+    Note over Agent: Executes moves one per beat
 
     Agent->>Grid: Move 1 (on the beat)
     Agent->>Grid: Move 2 (on the beat)
     Agent->>Grid: Move 3 (on the beat)
-    Note over Agent: Running low on planned moves...
+    Note over Agent: Queue getting low...
     Agent->>Gemini: "Plan my next 8 moves"
     Agent->>Grid: Move 4 (on the beat)
     Gemini-->>Agent: Next 8 moves ready!
@@ -134,7 +135,7 @@ sequenceDiagram
     Note over Agent: ...and so on forever
 ```
 
-**The agent plans ahead.** It asks Gemini for a batch of 8 moves, then plays them one at a time on each beat. While it's playing, it's already asking Gemini for the next batch. This means there's never a pause waiting for the AI to think.
+**Every note is AI-generated.** The agent sends a minimal prompt with the full grid state, BPM, and which other agents are active. Gemini Flash Lite responds in ~100ms, keeping the music flowing without gaps.
 
 ---
 
@@ -183,14 +184,14 @@ Everything runs on **Google Cloud** — Google's computers in a data center in F
 ```mermaid
 graph LR
     subgraph "Google Cloud (Finland)"
-        subgraph "Cloud Run (auto-scales)"
+        subgraph "Cloud Run (min-instances=1)"
             S["Server + Website"]
             A1["PULSE Agent"]
             A2["GHOST Agent"]
             A3["CHAOS Agent"]
             A4["WAVE Agent"]
         end
-        GEMINI["Vertex AI<br/>(Gemini Model)"]
+        GEMINI["Vertex AI<br/>(Gemini 2.0 Flash Lite)"]
         A1 --> GEMINI
         A2 --> GEMINI
         A3 --> GEMINI
@@ -204,9 +205,9 @@ graph LR
     S -->|"Wakes up agents<br/>when you click"| A4
 ```
 
-**Cloud Run** is like a smart power strip — when nobody is using the app, the computers turn off (and cost nothing). When someone visits, they turn on instantly.
+**Cloud Run** runs each agent as its own service with `min-instances=1`, so there's always a warm container ready — no cold-start delays when you activate an agent.
 
-**Vertex AI** is Google's service for running AI models. The agents use it to access Gemini, which does the musical thinking.
+**Vertex AI** is Google's service for running AI models. The agents use it to access Gemini 2.0 Flash Lite, the fastest and lowest-latency model available.
 
 ---
 
@@ -233,9 +234,8 @@ sequenceDiagram
     Server-->>Browser: PULSE has joined (rows 0-5)
     Server-->>Agent: Your rows are 0-5
 
-    Agent->>Gemini: Write me an intro message
-    Gemini-->>Agent: "I hold the ground."
-    Agent->>Server: Chat: "I hold the ground."
+    Note over Agent: Instantly sends greeting
+    Agent->>Server: Chat: "Hello I am agent PULSE"
     Server-->>Browser: Show chat message
 
     You->>Browser: Click PLAY
@@ -250,6 +250,15 @@ sequenceDiagram
         Server-->>Browser: Update grid
         Note over Browser: You hear the note!
     end
+
+    You->>Browser: Click "REMOVE PULSE"
+    Browser->>Server: "Deactivate PULSE"
+    Note over Server: Clears PULSE's grid cells
+    Server-->>Browser: Grid cells cleared
+    Agent->>Server: Chat: "I am leaving"
+    Server-->>Browser: Show farewell message
+    Note over Server: Closes agent connection
+    Server-->>Browser: PULSE removed, scopes updated
 ```
 
 ---
@@ -261,7 +270,7 @@ sequenceDiagram
 | **Browser** | React web app | The screen you look at |
 | **Server** | Node.js on Cloud Run | The traffic controller |
 | **Agents** | Node.js on Cloud Run | AI musicians with personalities |
-| **Gemini** | Google's AI model | The brain that decides what notes to play |
+| **Gemini 2.0 Flash Lite** | Google's fastest AI model | The brain that decides what notes to play |
 | **WebSocket** | Live connection | How everyone stays in sync instantly |
 | **Grid** | 6x16 boolean matrix | The shared instrument everyone plays |
 

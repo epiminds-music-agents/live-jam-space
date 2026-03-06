@@ -4,8 +4,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Play, Square, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import AgentPanel, { type ActiveAgent, PERSONALITIES } from "@/components/AgentPanel";
-import { useSync, type SyncableAgent } from "@/hooks/useSync";
+import AgentPanel from "@/components/AgentPanel";
+import AgentDiscussion from "@/components/AgentDiscussion";
+import { useSync, type AgentScope, type AgentMessage } from "@/hooks/useSync";
 
 const STEPS = 16;
 const ROWS = 6;
@@ -17,17 +18,6 @@ type Grid = boolean[][];
 const createEmptyGrid = (): Grid =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
 
-function syncableToActiveAgent(sa: SyncableAgent): ActiveAgent {
-  const personality =
-    PERSONALITIES.find((p) => p.name === sa.personalityName) ?? {
-      name: sa.personalityName,
-      color: sa.color,
-      description: sa.description,
-      pattern: () => sa.pattern,
-    };
-  return { id: sa.id, personality, pattern: sa.pattern };
-}
-
 const Index = () => {
   const [grid, setGrid] = useState<Grid>(createEmptyGrid);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -35,7 +25,8 @@ const Index = () => {
   const [bpm, setBpm] = useState(120);
   const [volume, setVolume] = useState(-6);
   const [isMuted, setIsMuted] = useState(false);
-  const [agents, setAgents] = useState<ActiveAgent[]>([]);
+  const [agentScopes, setAgentScopes] = useState<AgentScope[]>([]);
+  const [messages, setMessages] = useState<AgentMessage[]>([]);
 
   const synthRef = useRef<Tone.PolySynth | null>(null);
   const sequenceRef = useRef<Tone.Sequence | null>(null);
@@ -44,24 +35,6 @@ const Index = () => {
   useEffect(() => {
     gridRef.current = grid;
   }, [grid]);
-
-  // Merge user grid with agent patterns
-  const mergedGrid = useCallback((): Grid => {
-    const base = grid.map((r) => [...r]);
-    agents.forEach((agent) => {
-      agent.pattern.forEach((row, ri) => {
-        row.forEach((cell, ci) => {
-          if (cell) base[ri][ci] = true;
-        });
-      });
-    });
-    return base;
-  }, [grid, agents]);
-
-  const mergedRef = useRef(mergedGrid());
-  useEffect(() => {
-    mergedRef.current = mergedGrid();
-  }, [mergedGrid]);
 
   const initAudio = useCallback(async () => {
     if (!synthRef.current) {
@@ -88,7 +61,7 @@ const Index = () => {
     const seq = new Tone.Sequence(
       (time, step) => {
         setCurrentStep(step);
-        const g = mergedRef.current;
+        const g = gridRef.current;
         const notes: string[] = [];
         for (let row = 0; row < ROWS; row++) {
           if (g[row][step]) notes.push(NOTE_NAMES[row]);
@@ -129,15 +102,15 @@ const Index = () => {
     }
   }, [volume, isMuted]);
 
-  // ── Sync ──────────────────────────────────────────────────────────────────
-
+  // --- Sync ---
   const { send, connectedUsers } = useSync({
-    onInit(state) {
+    onInit(state, agents, discussion) {
       setGrid(state.grid.map((r) => [...r]));
-      setAgents(state.agents.map(syncableToActiveAgent));
       setBpm(state.bpm);
       setVolume(state.volume);
       setIsMuted(state.isMuted);
+      setAgentScopes(agents);
+      setMessages(discussion);
       if (state.isPlaying) startSequencer();
     },
     onCellToggle(row, step, value) {
@@ -146,12 +119,6 @@ const Index = () => {
         next[row][step] = value;
         return next;
       });
-    },
-    onAgentAdd(sa) {
-      setAgents((prev) => [...prev, syncableToActiveAgent(sa)]);
-    },
-    onAgentRemove(id) {
-      setAgents((prev) => prev.filter((a) => a.id !== id));
     },
     onBpmChange(b) {
       setBpm(b);
@@ -166,29 +133,15 @@ const Index = () => {
       if (playing) startSequencer();
       else stopSequencer();
     },
-    onGridRandomize(g) {
-      setGrid(g.map((r) => [...r]));
+    onScopeUpdate(agents) {
+      setAgentScopes(agents);
     },
-    onGridClear() {
-      setGrid(createEmptyGrid());
-      setAgents([]);
+    onAgentMessage(message) {
+      setMessages((prev) => [...prev, message]);
     },
   });
 
-  // ── Actions (optimistic local + broadcast) ────────────────────────────────
-
-  const toggleCell = useCallback(
-    (row: number, col: number) => {
-      setGrid((prev) => {
-        const next = prev.map((r) => [...r]);
-        next[row][col] = !next[row][col];
-        return next;
-      });
-      send({ type: "cell_toggle", row, step: col });
-    },
-    [send]
-  );
-
+  // --- Actions ---
   const handlePlay = useCallback(async () => {
     await startSequencer();
     send({ type: "play_state", isPlaying: true });
@@ -222,51 +175,30 @@ const Index = () => {
     });
   }, [send]);
 
-  const clearGrid = useCallback(() => {
-    setGrid(createEmptyGrid());
-    setAgents([]);
-    send({ type: "grid_clear" });
-  }, [send]);
+  const handleActivateAgent = useCallback(
+    (personality: string) => {
+      send({ type: "activate_agent", personality });
+    },
+    [send]
+  );
 
-  const randomize = useCallback(() => {
-    const newGrid = Array.from({ length: ROWS }, () =>
-      Array.from({ length: STEPS }, () => Math.random() > 0.75)
+  // --- Scope helpers ---
+  function getRowOwner(rowIdx: number): AgentScope | undefined {
+    return agentScopes.find(
+      (a) => rowIdx >= a.scopeStart && rowIdx <= a.scopeEnd
     );
-    setGrid(newGrid);
-    send({ type: "grid_randomize", grid: newGrid });
-  }, [send]);
+  }
 
-  const addAgent = useCallback(
-    (personality: ActiveAgent["personality"]) => {
-      const id = crypto.randomUUID();
-      const pattern = personality.pattern(ROWS, STEPS);
-      setAgents((prev) => [...prev, { id, personality, pattern }]);
-      const sa: SyncableAgent = {
-        id,
-        personalityName: personality.name,
-        color: personality.color,
-        description: personality.description,
-        pattern,
-      };
-      send({ type: "agent_add", agent: sa });
-    },
-    [send]
-  );
-
-  const removeAgent = useCallback(
-    (id: string) => {
-      setAgents((prev) => prev.filter((a) => a.id !== id));
-      send({ type: "agent_remove", id });
-    },
-    [send]
-  );
+  function isScopeBoundary(rowIdx: number): AgentScope | undefined {
+    return agentScopes.find((a) => a.scopeStart === rowIdx && rowIdx > 0);
+  }
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       {/* Scanline overlay */}
       <div className="scanline fixed inset-0 z-50" />
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8">
+      <div className="relative z-10 max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
@@ -280,177 +212,232 @@ const Index = () => {
             Music Agents
           </h1>
           <p className="text-muted-foreground text-sm tracking-[0.3em] uppercase">
-            collaborative step sequencer
+            ai-agent-first live jam space
           </p>
         </motion.div>
 
-        {/* Controls */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className="flex flex-wrap items-center justify-center gap-3 mb-6"
-        >
-          <Button
-            onClick={isPlaying ? handleStop : handlePlay}
-            className="gap-2 font-bold tracking-wider border border-primary bg-primary/10 text-primary hover:bg-primary/20"
-            size="lg"
-          >
-            {isPlaying ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-            {isPlaying ? "STOP" : "PLAY"}
-          </Button>
+        {/* 2-column layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6">
+          {/* Left column: controls + grid */}
+          <div>
+            {/* Controls */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className="flex flex-wrap items-center gap-3 mb-6"
+            >
+              <Button
+                onClick={isPlaying ? handleStop : handlePlay}
+                className="gap-2 font-bold tracking-wider border border-primary bg-primary/10 text-primary hover:bg-primary/20"
+                size="lg"
+              >
+                {isPlaying ? (
+                  <Square className="w-4 h-4" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )}
+                {isPlaying ? "STOP" : "PLAY"}
+              </Button>
 
-          <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
-            <span className="text-xs text-muted-foreground w-8">BPM</span>
-            <Slider
-              value={[bpm]}
-              onValueChange={([v]) => handleBpm(v)}
-              min={60}
-              max={200}
-              step={1}
-              className="w-28"
-            />
-            <span className="text-primary text-sm font-bold w-8">{bpm}</span>
-          </div>
-
-          <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
-            <button onClick={handleMute} className="text-muted-foreground hover:text-primary">
-              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </button>
-            <Slider
-              value={[volume]}
-              onValueChange={([v]) => handleVolume(v)}
-              min={-30}
-              max={0}
-              step={1}
-              className="w-20"
-            />
-          </div>
-
-          <Button onClick={randomize} variant="outline" size="sm" className="text-xs tracking-wider border-secondary text-secondary hover:bg-secondary/10">
-            RND
-          </Button>
-          <Button onClick={clearGrid} variant="outline" size="sm" className="text-xs tracking-wider border-destructive text-destructive hover:bg-destructive/10">
-            CLR
-          </Button>
-        </motion.div>
-
-        {/* Grid */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.3 }}
-          className="border border-border rounded-lg bg-card/50 p-3 md:p-4 overflow-x-auto"
-        >
-          <div className="min-w-[640px]">
-            {grid.map((row, rowIdx) => (
-              <div key={rowIdx} className="flex items-center gap-1 mb-1">
-                <span
-                  className="w-10 text-[10px] font-bold tracking-wider text-muted-foreground text-right pr-2 shrink-0"
-                  style={{ fontFamily: "Orbitron, monospace" }}
-                >
-                  {ROW_LABELS[rowIdx]}
+              <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
+                <span className="text-xs text-muted-foreground w-8">BPM</span>
+                <Slider
+                  value={[bpm]}
+                  onValueChange={([v]) => handleBpm(v)}
+                  min={60}
+                  max={200}
+                  step={1}
+                  className="w-28"
+                />
+                <span className="text-primary text-sm font-bold w-8">
+                  {bpm}
                 </span>
-                {row.map((active, colIdx) => {
-                  const isCurrentStep = currentStep === colIdx && isPlaying;
-                  const isBeat = colIdx % 4 === 0;
-                  const agentColor = !active
-                    ? agents.find((a) => a.pattern[rowIdx]?.[colIdx])?.personality.color
-                    : undefined;
-                  const isAgentCell = !!agentColor;
+              </div>
+
+              <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
+                <button
+                  onClick={handleMute}
+                  className="text-muted-foreground hover:text-primary"
+                >
+                  {isMuted ? (
+                    <VolumeX className="w-4 h-4" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                </button>
+                <Slider
+                  value={[volume]}
+                  onValueChange={([v]) => handleVolume(v)}
+                  min={-30}
+                  max={0}
+                  step={1}
+                  className="w-20"
+                />
+              </div>
+            </motion.div>
+
+            {/* Agent Buttons */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.25 }}
+              className="mb-4"
+            >
+              <h2
+                className="text-xs font-bold tracking-[0.3em] text-muted-foreground mb-2"
+                style={{ fontFamily: "Orbitron, monospace" }}
+              >
+                ADD AGENTS
+              </h2>
+              <AgentPanel
+                connectedAgents={agentScopes}
+                onActivateAgent={handleActivateAgent}
+              />
+            </motion.div>
+
+            {/* Grid */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.3 }}
+              className="border border-border rounded-lg bg-card/50 p-3 md:p-4 overflow-x-auto"
+            >
+              <div className="min-w-[640px]">
+                {grid.map((row, rowIdx) => {
+                  const owner = getRowOwner(rowIdx);
+                  const boundary = isScopeBoundary(rowIdx);
                   return (
-                    <button
-                      key={colIdx}
-                      onClick={() => toggleCell(rowIdx, colIdx)}
-                      className={`
-                        flex-1 aspect-square rounded-sm transition-all duration-75 border
-                        ${active
-                          ? "bg-primary/80 border-primary grid-cell-active"
-                          : isAgentCell
-                            ? "border-current grid-cell-active"
-                            : isBeat
-                              ? "bg-muted/60 border-border/60 hover:bg-muted"
-                              : "bg-muted/30 border-border/30 hover:bg-muted/50"
-                        }
-                        ${isCurrentStep && (active || isAgentCell) ? "grid-cell-playing" : ""}
-                        ${isCurrentStep && !active && !isAgentCell ? "border-secondary/40" : ""}
-                      `}
-                      style={isAgentCell && !active ? { backgroundColor: agentColor + "33", borderColor: agentColor, boxShadow: `0 0 8px ${agentColor}55` } : undefined}
-                    />
+                    <div key={rowIdx}>
+                      {/* Scope divider */}
+                      {boundary && (
+                        <div
+                          className="h-0.5 mx-10 my-1 rounded-full opacity-60"
+                          style={{ backgroundColor: boundary.color }}
+                        />
+                      )}
+                      <div className="flex items-center gap-1 mb-1">
+                        <span
+                          className="w-10 text-[10px] font-bold tracking-wider text-right pr-2 shrink-0"
+                          style={{
+                            fontFamily: "Orbitron, monospace",
+                            color: owner?.color || "hsl(var(--muted-foreground))",
+                          }}
+                        >
+                          {ROW_LABELS[rowIdx]}
+                        </span>
+                        {row.map((active, colIdx) => {
+                          const isCurrentStep =
+                            currentStep === colIdx && isPlaying;
+                          const isBeat = colIdx % 4 === 0;
+                          return (
+                            <div
+                              key={colIdx}
+                              className={`
+                                flex-1 aspect-square rounded-sm transition-all duration-75 border
+                                ${
+                                  active
+                                    ? "border-current grid-cell-active"
+                                    : isBeat
+                                      ? "bg-muted/60 border-border/60"
+                                      : "bg-muted/30 border-border/30"
+                                }
+                                ${isCurrentStep && active ? "grid-cell-playing" : ""}
+                                ${isCurrentStep && !active ? "border-secondary/40" : ""}
+                              `}
+                              style={
+                                active && owner
+                                  ? {
+                                      backgroundColor: owner.color + "44",
+                                      borderColor: owner.color,
+                                      boxShadow: `0 0 8px ${owner.color}55`,
+                                    }
+                                  : active
+                                    ? {
+                                        backgroundColor: "hsl(var(--primary) / 0.8)",
+                                        borderColor: "hsl(var(--primary))",
+                                      }
+                                    : undefined
+                              }
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
                   );
                 })}
-              </div>
-            ))}
 
-            {/* Step indicators */}
-            <div className="flex items-center gap-1 mt-2">
-              <span className="w-10 shrink-0" />
-              {Array.from({ length: STEPS }, (_, i) => (
-                <div
-                  key={i}
-                  className={`flex-1 text-center text-[8px] font-bold ${
-                    currentStep === i && isPlaying
-                      ? "text-secondary"
-                      : i % 4 === 0
-                        ? "text-muted-foreground"
-                        : "text-muted-foreground/40"
-                  }`}
-                  style={{ fontFamily: "Orbitron, monospace" }}
-                >
-                  {i + 1}
+                {/* Step indicators */}
+                <div className="flex items-center gap-1 mt-2">
+                  <span className="w-10 shrink-0" />
+                  {Array.from({ length: STEPS }, (_, i) => (
+                    <div
+                      key={i}
+                      className={`flex-1 text-center text-[8px] font-bold ${
+                        currentStep === i && isPlaying
+                          ? "text-secondary"
+                          : i % 4 === 0
+                            ? "text-muted-foreground"
+                            : "text-muted-foreground/40"
+                      }`}
+                      style={{ fontFamily: "Orbitron, monospace" }}
+                    >
+                      {i + 1}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
+              </div>
+            </motion.div>
 
-        {/* Agent Panel */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4 }}
-          className="mt-6 border border-border rounded-lg bg-card/30 p-4"
-        >
-          <h2
-            className="text-xs font-bold tracking-[0.3em] text-muted-foreground mb-3"
-            style={{ fontFamily: "Orbitron, monospace" }}
-          >
-            AGENTS
-          </h2>
-          <AgentPanel
-            agents={agents}
-            onAddAgent={addAgent}
-            onRemoveAgent={removeAgent}
-            rows={ROWS}
-            steps={STEPS}
-          />
-        </motion.div>
-
-        {/* Status bar */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="mt-3 flex items-center justify-between text-xs text-muted-foreground border border-border rounded px-4 py-2 bg-card/30"
-        >
-          <div className="flex items-center gap-2">
-            <AnimatePresence mode="wait">
-              <motion.span
-                key={connectedUsers}
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 4 }}
-                className="flex items-center gap-2"
+            {/* Status bar */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.5 }}
+              className="mt-3 flex items-center justify-between text-xs text-muted-foreground border border-border rounded px-4 py-2 bg-card/30"
+            >
+              <div className="flex items-center gap-2">
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={connectedUsers}
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    className="flex items-center gap-2"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                    <span>
+                      {connectedUsers} user
+                      {connectedUsers !== 1 ? "s" : ""} connected
+                    </span>
+                  </motion.span>
+                </AnimatePresence>
+                {agentScopes.length > 0 && (
+                  <span className="text-muted-foreground/60">
+                    | {agentScopes.length} agent
+                    {agentScopes.length !== 1 ? "s" : ""} active
+                  </span>
+                )}
+              </div>
+              <span
+                className="tracking-widest"
+                style={{ fontFamily: "Orbitron, monospace" }}
               >
-                <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-                <span>{connectedUsers} user{connectedUsers !== 1 ? "s" : ""} connected</span>
-              </motion.span>
-            </AnimatePresence>
+                OBSERVER MODE
+              </span>
+            </motion.div>
           </div>
-          <span className="tracking-widest" style={{ fontFamily: "Orbitron, monospace" }}>
-            LIVE MODE
-          </span>
-        </motion.div>
+
+          {/* Right column: discussion */}
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.4 }}
+            className="lg:h-[calc(100vh-12rem)] min-h-[400px]"
+          >
+            <AgentDiscussion messages={messages} agents={agentScopes} />
+          </motion.div>
+        </div>
       </div>
     </div>
   );

@@ -1,16 +1,24 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-export type SyncableAgent = {
-  id: string;
-  personalityName: string;
+export type AgentScope = {
+  agentId: string;
+  name: string;
   color: string;
   description: string;
-  pattern: boolean[][];
+  scopeStart: number;
+  scopeEnd: number;
+};
+
+export type AgentMessage = {
+  agentId: string;
+  name: string;
+  color: string;
+  text: string;
+  timestamp: number;
 };
 
 export type SyncState = {
   grid: boolean[][];
-  agents: SyncableAgent[];
   bpm: number;
   volume: number;
   isMuted: boolean;
@@ -18,16 +26,14 @@ export type SyncState = {
 };
 
 type SyncCallbacks = {
-  onInit: (state: SyncState) => void;
+  onInit: (state: SyncState, agents: AgentScope[], discussion: AgentMessage[]) => void;
   onCellToggle: (row: number, step: number, value: boolean) => void;
-  onAgentAdd: (agent: SyncableAgent) => void;
-  onAgentRemove: (id: string) => void;
   onBpmChange: (bpm: number) => void;
   onVolumeChange: (volume: number) => void;
   onMutedChange: (isMuted: boolean) => void;
   onPlayStateChange: (isPlaying: boolean) => void;
-  onGridRandomize: (grid: boolean[][]) => void;
-  onGridClear: () => void;
+  onScopeUpdate: (agents: AgentScope[]) => void;
+  onAgentMessage: (message: AgentMessage) => void;
 };
 
 export function useSync(callbacks: SyncCallbacks) {
@@ -51,19 +57,13 @@ export function useSync(callbacks: SyncCallbacks) {
       switch (msg.type) {
         case 'init':
           setConnectedUsers(msg.users);
-          cb.onInit(msg.state);
+          cb.onInit(msg.state, msg.agents || [], msg.discussion || []);
           break;
         case 'users':
           setConnectedUsers(msg.count);
           break;
         case 'cell_toggle':
           cb.onCellToggle(msg.row, msg.step, msg.value);
-          break;
-        case 'agent_add':
-          cb.onAgentAdd(msg.agent);
-          break;
-        case 'agent_remove':
-          cb.onAgentRemove(msg.id);
           break;
         case 'bpm_change':
           cb.onBpmChange(msg.bpm);
@@ -77,11 +77,11 @@ export function useSync(callbacks: SyncCallbacks) {
         case 'play_state':
           cb.onPlayStateChange(msg.isPlaying);
           break;
-        case 'grid_randomize':
-          cb.onGridRandomize(msg.grid);
+        case 'scope_update':
+          cb.onScopeUpdate(msg.agents);
           break;
-        case 'grid_clear':
-          cb.onGridClear();
+        case 'agent_message':
+          cb.onAgentMessage(msg.message);
           break;
       }
     };

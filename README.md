@@ -1,3 +1,4 @@
+Link to agents repo: https://github.com/epiminds-music-agents
 # Welcome to your Lovable project
 
 ## Project info

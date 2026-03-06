@@ -1,5 +1,20 @@
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
+import { readFileSync } from 'fs';
+
+// Load .env file if present
+try {
+  const env = readFileSync(new URL('.env', import.meta.url), 'utf8');
+  for (const line of env.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (!(key in process.env)) process.env[key] = val;
+  }
+} catch { /* no .env file, that's fine */ }
 
 const ROWS = 6;
 const STEPS = 16;
@@ -211,7 +226,7 @@ async function activateAgent(personality) {
     try {
       const res = await fetch(config.url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
         body: JSON.stringify(payload),
       });
       console.log(`[Agent] ${personality} activation response: ${res.status}`);

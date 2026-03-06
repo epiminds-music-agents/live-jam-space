@@ -34,6 +34,7 @@ type SyncCallbacks = {
   onPlayStateChange: (isPlaying: boolean) => void;
   onScopeUpdate: (agents: AgentScope[]) => void;
   onAgentMessage: (message: AgentMessage) => void;
+  onResetDiscussion: () => void;
 };
 
 export function useSync(callbacks: SyncCallbacks) {
@@ -82,6 +83,9 @@ export function useSync(callbacks: SyncCallbacks) {
           break;
         case 'agent_message':
           cb.onAgentMessage(msg.message);
+          break;
+        case 'reset_discussion':
+          cb.onResetDiscussion();
           break;
       }
     };

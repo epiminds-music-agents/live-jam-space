@@ -405,6 +405,16 @@ wss.on('connection', (ws) => {
             }
           }
           await saveGridToRedis();
+          // Broadcast farewell message
+          const farewellMsg = {
+            agentId: targetId,
+            name: agentData.name,
+            color: agentData.color,
+            text: 'I am leaving',
+            timestamp: Date.now(),
+          };
+          await addDiscussionMessage(farewellMsg);
+          broadcast({ type: 'agent_message', message: farewellMsg });
           agents.delete(targetId);
           agentLastToggle.delete(targetId);
           recalculateScopes();
@@ -414,6 +424,39 @@ wss.on('connection', (ws) => {
           for (const client of wss.clients) {
             if (client.agentId === targetId) { client.close(); break; }
           }
+          break;
+        }
+
+        // --- Reset session: kick all agents, clear grid ---
+        case 'reset_session': {
+          console.log('[Browser] Reset session requested');
+          // Clear entire grid
+          for (let r = 0; r < ROWS; r++) {
+            for (let s = 0; s < STEPS; s++) {
+              if (state.grid[r][s]) {
+                state.grid[r][s] = false;
+                broadcast({ type: 'cell_toggle', row: r, step: s, value: false });
+              }
+            }
+          }
+          await saveGridToRedis();
+          // Kick all agents
+          const agentClients = [];
+          for (const client of wss.clients) {
+            if (client.clientType === 'agent') agentClients.push(client);
+          }
+          agents.clear();
+          agentLastToggle.clear();
+          await saveAgentsToRedis();
+          broadcast({ type: 'scope_update', agents: [] });
+          for (const client of agentClients) {
+            client.close();
+          }
+          // Clear discussion
+          discussion.length = 0;
+          if (redisConnected) await redis.del('jam:discussion');
+          broadcast({ type: 'reset_discussion' });
+          console.log('[Browser] Session reset complete');
           break;
         }
 

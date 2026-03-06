@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import * as Tone from "tone";
 import { motion, AnimatePresence } from "framer-motion";
-import { Play, Square, Volume2, VolumeX } from "lucide-react";
+import { Play, Square, Volume2, VolumeX, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import AgentPanel from "@/components/AgentPanel";
@@ -139,6 +139,9 @@ const Index = () => {
     onAgentMessage(message) {
       setMessages((prev) => [...prev, message]);
     },
+    onResetDiscussion() {
+      setMessages([]);
+    },
   });
 
   // --- Actions ---
@@ -188,6 +191,10 @@ const Index = () => {
     },
     [send]
   );
+
+  const handleReset = useCallback(() => {
+    send({ type: "reset_session" });
+  }, [send]);
 
   // --- Scope helpers ---
   function getRowOwner(rowIdx: number): AgentScope | undefined {
@@ -291,12 +298,25 @@ const Index = () => {
               transition={{ delay: 0.25 }}
               className="mb-4"
             >
-              <h2
-                className="text-xs font-bold tracking-[0.3em] text-muted-foreground mb-2"
-                style={{ fontFamily: "Orbitron, monospace" }}
-              >
-                ADD AGENTS
-              </h2>
+              <div className="flex items-center justify-between mb-2">
+                <h2
+                  className="text-xs font-bold tracking-[0.3em] text-muted-foreground"
+                  style={{ fontFamily: "Orbitron, monospace" }}
+                >
+                  AGENTS
+                </h2>
+                {agentScopes.length > 0 && (
+                  <Button
+                    onClick={handleReset}
+                    variant="destructive"
+                    size="sm"
+                    className="text-[10px] tracking-wider gap-1.5 h-6"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    RESET ALL
+                  </Button>
+                )}
+              </div>
               <AgentPanel
                 connectedAgents={agentScopes}
                 onActivateAgent={handleActivateAgent}

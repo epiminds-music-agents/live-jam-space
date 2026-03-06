@@ -236,11 +236,19 @@ function sendTo(ws, data) {
   if (ws.readyState === 1) ws.send(JSON.stringify(data));
 }
 
+function getBrowserCount() {
+  let count = 0;
+  for (const client of wss.clients) {
+    if (client.clientType !== 'agent' && client.readyState === 1) count++;
+  }
+  return count;
+}
+
 wss.on('connection', (ws) => {
   ws.clientType = 'browser';
   ws.agentId = null;
 
-  const count = wss.clients.size;
+  const count = getBrowserCount();
   console.log(`[+] Client connected (${count} total)`);
 
   sendTo(ws, {
@@ -281,6 +289,7 @@ wss.on('connection', (ws) => {
             isPlaying: state.isPlaying,
           });
           broadcast({ type: 'scope_update', agents: getAgentsArray() });
+          broadcast({ type: 'users', count: getBrowserCount() });
           console.log(`[Agent] ${name} connected (scope: rows ${agent.scopeStart}-${agent.scopeEnd})`);
           break;
         }
@@ -338,6 +347,34 @@ wss.on('connection', (ws) => {
           await activateAgent(personality);
           break;
         }
+        case 'deactivate_agent': {
+          const { personality } = msg;
+          console.log(`[Browser] Requested deactivation of ${personality}`);
+          let targetId = null;
+          for (const [id, agent] of agents) {
+            if (agent.name === personality) { targetId = id; break; }
+          }
+          if (!targetId) break;
+          const agentData = agents.get(targetId);
+          for (let r = agentData.scopeStart; r <= agentData.scopeEnd; r++) {
+            for (let s = 0; s < STEPS; s++) {
+              if (state.grid[r][s]) {
+                state.grid[r][s] = false;
+                broadcast({ type: 'cell_toggle', row: r, step: s, value: false });
+              }
+            }
+          }
+          await saveGridToRedis();
+          agents.delete(targetId);
+          agentLastToggle.delete(targetId);
+          recalculateScopes();
+          await saveAgentsToRedis();
+          broadcast({ type: 'scope_update', agents: getAgentsArray() });
+          for (const client of wss.clients) {
+            if (client.agentId === targetId) { client.close(); break; }
+          }
+          break;
+        }
         case 'bpm_change':
           state.bpm = msg.bpm;
           await savePlaybackToRedis();
@@ -376,7 +413,7 @@ wss.on('connection', (ws) => {
         broadcast({ type: 'scope_update', agents: getAgentsArray() });
       }
     }
-    const remaining = wss.clients.size;
+    const remaining = getBrowserCount();
     console.log(`[-] Client disconnected (${remaining} remaining)`);
     broadcast({ type: 'users', count: remaining });
   });

@@ -182,6 +182,13 @@ const Index = () => {
     [send]
   );
 
+  const handleDeactivateAgent = useCallback(
+    (personality: string) => {
+      send({ type: "deactivate_agent", personality });
+    },
+    [send]
+  );
+
   // --- Scope helpers ---
   function getRowOwner(rowIdx: number): AgentScope | undefined {
     return agentScopes.find(
@@ -293,6 +300,7 @@ const Index = () => {
               <AgentPanel
                 connectedAgents={agentScopes}
                 onActivateAgent={handleActivateAgent}
+                onDeactivateAgent={handleDeactivateAgent}
               />
             </motion.div>
 

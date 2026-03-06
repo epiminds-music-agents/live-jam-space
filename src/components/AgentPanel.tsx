@@ -12,9 +12,10 @@ export const AGENT_PERSONALITIES = [
 type AgentPanelProps = {
   connectedAgents: AgentScope[];
   onActivateAgent: (personality: string) => void;
+  onDeactivateAgent: (personality: string) => void;
 };
 
-const AgentPanel = ({ connectedAgents, onActivateAgent }: AgentPanelProps) => {
+const AgentPanel = ({ connectedAgents, onActivateAgent, onDeactivateAgent }: AgentPanelProps) => {
   const connectedNames = new Set(connectedAgents.map((a) => a.name));
 
   return (
@@ -24,17 +25,15 @@ const AgentPanel = ({ connectedAgents, onActivateAgent }: AgentPanelProps) => {
         return (
           <Button
             key={p.name}
-            onClick={() => onActivateAgent(p.personality)}
-            variant="outline"
+            onClick={() => isConnected ? onDeactivateAgent(p.personality) : onActivateAgent(p.personality)}
+            variant={isConnected ? "destructive" : "outline"}
             size="sm"
-            disabled={isConnected}
             className="text-[10px] tracking-wider gap-1.5 border-border hover:border-current transition-colors"
-            style={{ color: p.color, opacity: isConnected ? 0.4 : 1 }}
+            style={{ color: isConnected ? undefined : p.color, opacity: 1 }}
             title={p.description}
           >
             <Bot className="w-3 h-3" />
-            {p.name}
-            {isConnected && " (LIVE)"}
+            {isConnected ? `REMOVE ${p.name}` : p.name}
           </Button>
         );
       })}

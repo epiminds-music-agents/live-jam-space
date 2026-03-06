@@ -9,11 +9,41 @@ import AgentDiscussion from "@/components/AgentDiscussion";
 import { useSync, type AgentScope, type AgentMessage } from "@/hooks/useSync";
 
 const STEPS = 16;
-const ROWS = 6;
-const NOTE_NAMES = ["C5", "A4", "F4", "D4", "A3", "D3"];
-const ROW_LABELS = ["HI", "MH", "MD", "ML", "LO", "SUB"];
+const ROWS = 16; // 4 rows per instrument: kick, guitar, piano, synth
+
+// TROUBLESHOOTING: Set to true to bypass all effects (distortion, reverb) and hear raw synths.
+// Compare with false to see if the "synthy" sound comes from effects or from the oscillators.
+const BYPASS_EFFECTS = false;
+// Rows 0-3: kick (low), 4-7: guitar, 8-11: piano, 12-15: synth
+const NOTE_NAMES = [
+  "C2", "C#2", "D2", "D#2",   // kick (main, punch, accent, ghost)
+  "E2", "G2", "B2", "E3",     // guitar (low to high)
+  "C3", "E3", "G3", "C4",     // piano
+  "G3", "A3", "C4", "E4",     // synth/default
+];
+const ROW_LABELS = [
+  "K1", "K2", "K3", "K4",    // Kick
+  "G1", "G2", "G3", "G4",    // Guitar
+  "P1", "P2", "P3", "P4",    // Piano
+  "S1", "S2", "S3", "S4",    // Synth
+];
 
 type Grid = boolean[][];
+
+/** Instrument that can play notes and has a volume control (for mute/master). */
+type ChainSynth =
+  | Tone.PolySynth<Tone.MonoSynth>
+  | Tone.MembraneSynth
+  | Tone.PolySynth<Tone.Synth>;
+type PlayableInstrument =
+  | Tone.PolySynth<Tone.Synth<Tone.SynthOptions>>
+  | { synth: ChainSynth; volume: Tone.Volume };
+
+function isChainInstrument(
+  inst: PlayableInstrument
+): inst is { synth: ChainSynth; volume: Tone.Volume } {
+  return "synth" in inst && "volume" in inst;
+}
 
 const createEmptyGrid = (): Grid =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
@@ -28,24 +58,99 @@ const Index = () => {
   const [agentScopes, setAgentScopes] = useState<AgentScope[]>([]);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
 
-  const synthRef = useRef<Tone.PolySynth | null>(null);
+  const synthRef = useRef<Tone.PolySynth<Tone.Synth> | null>(null);
+  /** Per-agent instruments. Keys: agent name (e.g. "PULSE") or "default". */
+  const instrumentsRef = useRef<Record<string, PlayableInstrument>>({});
   const sequenceRef = useRef<Tone.Sequence | null>(null);
   const gridRef = useRef(grid);
+  const agentScopesRef = useRef<AgentScope[]>([]);
 
   useEffect(() => {
     gridRef.current = grid;
   }, [grid]);
 
+  useEffect(() => {
+    agentScopesRef.current = agentScopes;
+  }, [agentScopes]);
+
   const initAudio = useCallback(async () => {
-    if (!synthRef.current) {
-      await Tone.start();
-      const synth = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "triangle8" },
-        envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.3 },
-      }).toDestination();
-      synth.volume.value = volume;
-      synthRef.current = synth;
+    await Tone.start();
+    if (synthRef.current) return;
+
+    // Default: soft sound (no beep) when no per-agent instrument is set
+    const defaultSynth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.02, decay: 0.3, sustain: 0.2, release: 0.4 },
+    }).toDestination();
+    defaultSynth.volume.value = volume;
+    synthRef.current = defaultSynth;
+    instrumentsRef.current.default = defaultSynth;
+
+    // PULSE: rock drum kick (MembraneSynth)
+    const kickSynth = new Tone.MembraneSynth({
+      pitchDecay: 0.05,
+      octaves: 6,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.3, sustain: 0, release: 0.2 },
+    });
+    const kickVol = new Tone.Volume(volume).toDestination();
+    if (BYPASS_EFFECTS) {
+      kickSynth.connect(kickVol);
+    } else {
+      const kickDistortion = new Tone.Distortion({ distortion: 0.2, wet: 0.3 });
+      kickSynth.connect(kickDistortion);
+      kickDistortion.connect(kickVol);
     }
+    instrumentsRef.current.PULSE = { synth: kickSynth, volume: kickVol };
+
+    // WAVE: rock guitar (distorted, mid-range)
+    const guitarSynth = new Tone.PolySynth(Tone.MonoSynth, {
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.01, decay: 0.2, sustain: 0.4, release: 0.3 },
+      filter: { type: "lowpass", frequency: 2800, rolloff: -12 },
+      filterEnvelope: {
+        attack: 0.01,
+        decay: 0.3,
+        sustain: 0.5,
+        release: 0.4,
+        baseFrequency: 400,
+        octaves: 2,
+      },
+    });
+    const guitarVol = new Tone.Volume(volume).toDestination();
+    if (BYPASS_EFFECTS) {
+      guitarSynth.connect(guitarVol);
+    } else {
+      const guitarDistortion = new Tone.Distortion({ distortion: 0.5, wet: 0.6 });
+      const guitarReverb = new Tone.Reverb({ decay: 0.6, wet: 0.2, preDelay: 0.01 });
+      await guitarReverb.generate();
+      guitarSynth.connect(guitarDistortion);
+      guitarDistortion.connect(guitarReverb);
+      guitarReverb.connect(guitarVol);
+    }
+    instrumentsRef.current.WAVE = { synth: guitarSynth, volume: guitarVol };
+
+    // GHOST: piano (FM-based, no samples)
+    const pianoSynth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" },
+      envelope: {
+        attack: 0.005,
+        decay: 0.4,
+        sustain: 0.3,
+        release: 0.5,
+      },
+      volume: -2,
+    });
+    const pianoVol = new Tone.Volume(volume).toDestination();
+    if (BYPASS_EFFECTS) {
+      pianoSynth.connect(pianoVol);
+    } else {
+      const pianoReverb = new Tone.Reverb({ decay: 1.2, wet: 0.35, preDelay: 0.02 });
+      await pianoReverb.generate();
+      pianoSynth.connect(pianoReverb);
+      pianoReverb.connect(pianoVol);
+    }
+    instrumentsRef.current.GHOST = { synth: pianoSynth, volume: pianoVol };
   }, [volume]);
 
   const startSequencer = useCallback(async () => {
@@ -62,12 +167,27 @@ const Index = () => {
       (time, step) => {
         setCurrentStep(step);
         const g = gridRef.current;
-        const notes: string[] = [];
+        const scopes = agentScopesRef.current;
+        const instruments = instrumentsRef.current;
+
+        // When only one agent is PULSE, use slap bass for all rows (robust across servers)
+        const onlyPulse =
+          scopes.length === 1 &&
+          scopes[0].name?.toUpperCase() === "PULSE";
         for (let row = 0; row < ROWS; row++) {
-          if (g[row][step]) notes.push(NOTE_NAMES[row]);
-        }
-        if (notes.length > 0 && synthRef.current) {
-          synthRef.current.triggerAttackRelease(notes, "16n", time);
+          if (!g[row][step]) continue;
+          const owner = scopes.find(
+            (a) => row >= a.scopeStart && row <= a.scopeEnd
+          );
+          const key = onlyPulse
+            ? "PULSE"
+            : owner?.name
+              ? owner.name.toUpperCase()
+              : "default";
+          const inst = instruments[key] ?? instruments.default;
+          if (!inst) continue;
+          const synth = isChainInstrument(inst) ? inst.synth : inst;
+          synth.triggerAttackRelease(NOTE_NAMES[row], "16n", time);
         }
       },
       Array.from({ length: STEPS }, (_, i) => i),
@@ -97,8 +217,17 @@ const Index = () => {
   }, [bpm, isPlaying]);
 
   useEffect(() => {
+    const v = isMuted ? -Infinity : volume;
     if (synthRef.current) {
-      synthRef.current.volume.value = isMuted ? -Infinity : volume;
+      synthRef.current.volume.value = v;
+    }
+    const instruments = instrumentsRef.current;
+    for (const name of ["PULSE", "WAVE", "GHOST"] as const) {
+      const inst = instruments[name];
+      if (inst && isChainInstrument(inst)) {
+        const vol = inst.volume as { volume: { value: number } };
+        vol.volume.value = v;
+      }
     }
   }, [volume, isMuted]);
 
@@ -110,6 +239,7 @@ const Index = () => {
       setVolume(state.volume);
       setIsMuted(state.isMuted);
       setAgentScopes(agents);
+      agentScopesRef.current = agents; // so sequencer sees correct instrument immediately
       setMessages(discussion);
       if (state.isPlaying) startSequencer();
     },
@@ -135,6 +265,7 @@ const Index = () => {
     },
     onScopeUpdate(agents) {
       setAgentScopes(agents);
+      agentScopesRef.current = agents; // so sequencer uses PULSE/etc. right away
     },
     onAgentMessage(message) {
       setMessages((prev) => [...prev, message]);
@@ -324,12 +455,12 @@ const Index = () => {
               />
             </motion.div>
 
-            {/* Grid */}
+            {/* Grid — 16 rows × 16 steps, scroll when needed */}
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.3 }}
-              className="border border-border rounded-lg bg-card/50 p-3 md:p-4 overflow-x-auto"
+              className="border border-border rounded-lg bg-card/50 p-3 md:p-4 overflow-auto max-h-[70vh]"
             >
               <div className="min-w-[640px]">
                 {grid.map((row, rowIdx) => {

@@ -58,7 +58,7 @@ When `isPlaying` becomes `true`, agents may start modifying the grid:
 **Constraints (server-enforced):**
 - Must be within assigned scope (rows)
 - Must be during play mode (`isPlaying === true`)
-- Max 1 toggle per beat interval (60000 / BPM ms)
+- Rate limit: up to 6 toggles per beat (min interval = (60000 / BPM) / 6 ms). To fill the grid faster, run your play loop at this shorter interval and send one move per tick.
 
 Rejected toggles receive:
 ```json
@@ -75,10 +75,11 @@ Listen for:
 
 ## Scope Partitioning
 
-6 rows split equally across N agents:
-- 1 agent: rows 0-5
-- 2 agents: 0-2, 3-5
-- 3 agents: 0-1, 2-3, 4-5
+16 rows total; 4 rows per instrument when 4 agents are connected. Agents are assigned scope in fixed order (PULSE, WAVE, GHOST, CHAOS):
+- 1 agent: rows 0-15
+- 2 agents: 0-7, 8-15
+- 3 agents: 0-5, 6-10, 11-15
+- 4 agents: 0-3 (PULSE), 4-7 (WAVE), 8-11 (GHOST), 12-15 (CHAOS)
 
 Scopes are recalculated on every agent connect/disconnect.
 
@@ -86,7 +87,7 @@ Scopes are recalculated on every agent connect/disconnect.
 
 | Variable | Description |
 |---|---|
-| `REDIS_URL` | Redis connection URL (default: `redis://localhost:6379`) |
+| `REDIS_URL` | Redis connection URL (default: `redis://localhost:6379`). For local dev, start Redis with `docker compose up -d redis` (see project `docker-compose.yml`). |
 | `AGENT_PULSE_URL` | Activation URL for PULSE agent |
 | `AGENT_GHOST_URL` | Activation URL for GHOST agent |
 | `AGENT_CHAOS_URL` | Activation URL for CHAOS agent |

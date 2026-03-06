@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const PORT = process.env.PORT || 8080;
-const ROWS = 6;
+const ROWS = 16; // 4 rows per instrument (PULSE, WAVE, GHOST, CHAOS/default)
 const STEPS = 16;
 const DISCUSSION_CAP = 500;
 
@@ -144,11 +144,19 @@ async function loadStateFromRedis() {
   }
 }
 
+// Fixed order so rows 0-3=kick, 4-7=guitar, 8-11=piano, 12-15=synth
+const SCOPE_ORDER = ['PULSE', 'WAVE', 'GHOST', 'CHAOS'];
+
 // --- Scope Partitioning ---
 function recalculateScopes() {
   const agentList = [...agents.values()];
   const N = agentList.length;
   if (N === 0) return;
+  agentList.sort((a, b) => {
+    const i = SCOPE_ORDER.indexOf(a.name);
+    const j = SCOPE_ORDER.indexOf(b.name);
+    return (i === -1 ? 99 : i) - (j === -1 ? 99 : j);
+  });
   const rowsPerAgent = Math.floor(ROWS / N);
   const remainder = ROWS % N;
   for (let i = 0; i < N; i++) {
@@ -164,13 +172,17 @@ function getAgentsArray() {
 }
 
 // --- Rate Limiter ---
+// Allow multiple toggles per beat so grid fills faster
+const TOGGLES_PER_BEAT = 6;
+
 function canAgentToggle(agentId) {
   if (!state.isPlaying) return { allowed: false, reason: 'not_playing' };
   const agent = agents.get(agentId);
   if (!agent) return { allowed: false, reason: 'unknown_agent' };
   const beatIntervalMs = 60000 / state.bpm;
+  const minIntervalMs = beatIntervalMs / TOGGLES_PER_BEAT;
   const last = agentLastToggle.get(agentId) || 0;
-  if (Date.now() - last < beatIntervalMs) {
+  if (Date.now() - last < minIntervalMs) {
     return { allowed: false, reason: 'rate_limited' };
   }
   return { allowed: true };

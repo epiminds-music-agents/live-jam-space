@@ -277,7 +277,7 @@ const Index = () => {
             className="text-4xl md:text-5xl font-bold tracking-widest text-primary mb-2"
             style={{ fontFamily: "Orbitron, monospace" }}
           >
-            GRID_SYNTH
+            Music Agents
           </h1>
           <p className="text-muted-foreground text-sm tracking-[0.3em] uppercase">
             collaborative step sequencer

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently --kill-others \"node server.js\" \"vite\"",
+    "dev": "concurrently --kill-others \"npm run dev --prefix backend\" \"vite\"",
     "dev:vite": "vite",
     "build": "vite build",
     "build:dev": "vite build --mode development",

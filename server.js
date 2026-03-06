@@ -124,6 +124,24 @@ async function saveAgentsToRedis() {
   }
 }
 
+/** Strip leaked AI output (move-plan JSON, code blocks) from agent chat so it doesn't appear in the UI. */
+function sanitizeAgentChatText(text) {
+  if (typeof text !== 'string') return '…';
+  let out = text.trim();
+  // Remove markdown code blocks (e.g. ```json\n[...]\n```)
+  out = out.replace(/```[\w]*\s*[\s\S]*?```/g, '').trim();
+  // If what remains looks like a move-plan JSON array, treat as ineligible
+  const looksLikeMovePlan = /^\s*\[\s*(\{\s*"row"\s*:\s*\d+\s*,\s*"step"\s*:\s*\d+\s*\}\s*,?\s*)*\s*\]\s*$/;
+  if (looksLikeMovePlan.test(out)) return '…';
+  // Also catch messages that are mostly/only JSON (e.g. "bzzzt ```json [...]" already stripped to "bzzzt " or similar)
+  if (out.match(/\{\s*"row"\s*:\s*\d+\s*,\s*"step"\s*:\s*\d+\s*}/)) {
+    out = out.replace(/\{\s*"row"\s*:\s*\d+\s*,\s*"step"\s*:\s*\d+\s*}[,\]\s]*/g, '').trim();
+  }
+  // If nothing left except brackets/commas/whitespace, show placeholder
+  if (!out || out.replace(/[\s\[\],]/g, '').length === 0) return '…';
+  return out.slice(0, 500); // cap length
+}
+
 async function addDiscussionMessage(msg) {
   discussion.push(msg);
   if (discussion.length > DISCUSSION_CAP) discussion.shift();
@@ -381,7 +399,7 @@ wss.on('connection', (ws) => {
             agentId: msg.agentId,
             name: msg.name,
             color: msg.color,
-            text: msg.text,
+            text: sanitizeAgentChatText(msg.text),
             timestamp: msg.timestamp || Date.now(),
           };
           await addDiscussionMessage(chatMsg);

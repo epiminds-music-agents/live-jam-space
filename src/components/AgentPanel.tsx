@@ -11,29 +11,42 @@ export const AGENT_PERSONALITIES = [
 
 type AgentPanelProps = {
   connectedAgents: AgentScope[];
+  pendingAgents: string[];
   onActivateAgent: (personality: string) => void;
   onDeactivateAgent: (personality: string) => void;
 };
 
-const AgentPanel = ({ connectedAgents, onActivateAgent, onDeactivateAgent }: AgentPanelProps) => {
+const AgentPanel = ({
+  connectedAgents,
+  pendingAgents,
+  onActivateAgent,
+  onDeactivateAgent,
+}: AgentPanelProps) => {
   const connectedNames = new Set(connectedAgents.map((a) => a.name));
+  const pendingNames = new Set(pendingAgents.map((name) => name.toUpperCase()));
 
   return (
     <div className="flex flex-wrap gap-2">
       {AGENT_PERSONALITIES.map((p) => {
         const isConnected = connectedNames.has(p.name);
+        const isPending = !isConnected && pendingNames.has(p.name);
         return (
           <Button
             key={p.name}
-            onClick={() => isConnected ? onDeactivateAgent(p.personality) : onActivateAgent(p.personality)}
-            variant={isConnected ? "destructive" : "outline"}
+            onClick={() => {
+              if (isPending) return;
+              if (isConnected) onDeactivateAgent(p.personality);
+              else onActivateAgent(p.personality);
+            }}
+            variant={isConnected ? "destructive" : isPending ? "secondary" : "outline"}
             size="sm"
             className="text-[10px] tracking-wider gap-1.5 border-border hover:border-current transition-colors"
-            style={{ color: isConnected ? undefined : p.color, opacity: 1 }}
+            disabled={isPending}
+            style={{ color: isConnected || isPending ? undefined : p.color, opacity: isPending ? 0.8 : 1 }}
             title={p.description}
           >
             <Bot className="w-3 h-3" />
-            {isConnected ? `REMOVE ${p.name}` : p.name}
+            {isConnected ? `REMOVE ${p.name}` : isPending ? `CONNECTING ${p.name}` : p.name}
           </Button>
         );
       })}

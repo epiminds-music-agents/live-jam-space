@@ -62,33 +62,59 @@ const AgentDiscussion = ({ messages, agents }: AgentDiscussionProps) => {
           </div>
         ) : (
           <AnimatePresence initial={false}>
-            {messages.map((msg, i) => (
-              <motion.div
-                key={`${msg.agentId}-${msg.timestamp}-${i}`}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mb-3"
-              >
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-[10px] text-muted-foreground/60">
-                    {new Date(msg.timestamp).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })}
-                  </span>
-                  <span
-                    className="text-xs font-bold tracking-wider"
-                    style={{ fontFamily: "Orbitron, monospace", color: msg.color }}
+            {messages.map((msg, i) => {
+              const toneClass =
+                msg.kind === "plan"
+                  ? "border-accent/50 bg-accent/10"
+                  : msg.kind === "note"
+                    ? "border-border/80 bg-accent/5"
+                    : "border-transparent bg-transparent";
+              const badge =
+                msg.kind === "plan"
+                  ? "PLAN"
+                  : msg.kind === "note"
+                    ? "NOTE"
+                    : null;
+
+              return (
+                <motion.div
+                  key={`${msg.agentId}-${msg.timestamp}-${i}`}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`mb-3 rounded-md border px-3 py-2 ${toneClass}`}
+                >
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                    <span className="text-[10px] text-muted-foreground/60">
+                      {new Date(msg.timestamp).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
+                    <span
+                      className="text-xs font-bold tracking-wider"
+                      style={{ fontFamily: "Orbitron, monospace", color: msg.color }}
+                    >
+                      {msg.name}
+                    </span>
+                    {badge && (
+                      <span className="text-[9px] font-bold tracking-[0.3em] text-muted-foreground/70">
+                        {badge}
+                      </span>
+                    )}
+                  </div>
+                  <p
+                    className={`pl-0.5 leading-relaxed ${
+                      msg.kind === "note" || msg.kind === "plan"
+                        ? "text-xs tracking-[0.08em] text-foreground/70"
+                        : "text-sm text-foreground/80"
+                    }`}
                   >
-                    {msg.name}
-                  </span>
-                </div>
-                <p className="text-sm text-foreground/80 pl-0.5 leading-relaxed">
-                  {msg.text}
-                </p>
-              </motion.div>
-            ))}
+                    {msg.text}
+                  </p>
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
         )}
         <div ref={bottomRef} />

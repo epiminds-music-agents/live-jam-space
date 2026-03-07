@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 8080;
 const ROWS = 16; // 4 rows per instrument (PULSE, WAVE, GHOST, CHAOS/default)
 const STEPS = 16;
 const DISCUSSION_CAP = 500;
+const ACTIVATION_TIMEOUT_MS = 15000;
 
 // --- Agent Pool ---
 const AGENT_POOL = [
@@ -69,6 +70,8 @@ async function connectRedis() {
 // --- In-memory state ---
 const createEmptyGrid = () =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
+const createEmptyOwnerGrid = () =>
+  Array.from({ length: ROWS }, () => Array(STEPS).fill(null));
 
 const state = {
   grid: createEmptyGrid(),
@@ -77,10 +80,28 @@ const state = {
   isMuted: false,
   isPlaying: false,
 };
+const cellOwners = createEmptyOwnerGrid();
+
+function normalizeDiscussionKind(kind) {
+  return kind === 'note' || kind === 'plan' ? kind : 'chat';
+}
+
+function normalizeDiscussionMessage(msg) {
+  return {
+    agentId: msg.agentId,
+    name: msg.name,
+    color: msg.color,
+    kind: normalizeDiscussionKind(msg.kind),
+    agreement: msg.agreement || undefined,
+    text: msg.text,
+    timestamp: msg.timestamp || Date.now(),
+  };
+}
 
 const agents = new Map();
 const discussion = [];
 const agentLastToggle = new Map();
+const pendingActivations = new Map();
 
 // --- Redis persistence ---
 async function saveGridToRedis() {
@@ -115,10 +136,11 @@ async function saveAgentsToRedis() {
 }
 
 async function addDiscussionMessage(msg) {
-  discussion.push(msg);
+  const normalized = normalizeDiscussionMessage(msg);
+  discussion.push(normalized);
   if (discussion.length > DISCUSSION_CAP) discussion.shift();
   if (!redisConnected) return;
-  await redis.rpush('jam:discussion', JSON.stringify(msg));
+  await redis.rpush('jam:discussion', JSON.stringify(normalized));
   await redis.ltrim('jam:discussion', -DISCUSSION_CAP, -1);
 }
 
@@ -140,23 +162,25 @@ async function loadStateFromRedis() {
   const msgs = await redis.lrange('jam:discussion', 0, -1);
   discussion.length = 0;
   for (const m of msgs) {
-    try { discussion.push(JSON.parse(m)); } catch {}
+    try { discussion.push(normalizeDiscussionMessage(JSON.parse(m))); } catch {}
   }
 }
 
 // Fixed order so rows 0-3=kick, 4-7=guitar, 8-11=piano, 12-15=synth
 const SCOPE_ORDER = ['PULSE', 'WAVE', 'GHOST', 'CHAOS'];
 
+function compareAgentsByScopeOrder(left, right) {
+  const leftIndex = SCOPE_ORDER.indexOf(left.name);
+  const rightIndex = SCOPE_ORDER.indexOf(right.name);
+  return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+}
+
 // --- Scope Partitioning ---
 function recalculateScopes() {
   const agentList = [...agents.values()];
   const N = agentList.length;
   if (N === 0) return;
-  agentList.sort((a, b) => {
-    const i = SCOPE_ORDER.indexOf(a.name);
-    const j = SCOPE_ORDER.indexOf(b.name);
-    return (i === -1 ? 99 : i) - (j === -1 ? 99 : j);
-  });
+  agentList.sort(compareAgentsByScopeOrder);
   const rowsPerAgent = Math.floor(ROWS / N);
   const remainder = ROWS % N;
   for (let i = 0; i < N; i++) {
@@ -168,7 +192,87 @@ function recalculateScopes() {
 }
 
 function getAgentsArray() {
-  return [...agents.values()];
+  return [...agents.values()].sort(compareAgentsByScopeOrder);
+}
+
+function getPendingActivationsArray() {
+  return [...pendingActivations.values()]
+    .map(({ agentId, personality, requestedAt }) => ({
+      agentId,
+      personality,
+      requestedAt,
+    }))
+    .sort((left, right) => left.requestedAt - right.requestedAt);
+}
+
+function isAgentConnected(personality) {
+  for (const agent of agents.values()) {
+    if (agent.name === personality) return true;
+  }
+  return false;
+}
+
+function closeAgentSocketsByIds(agentIds, exclude = null) {
+  if (agentIds.length === 0) return;
+  const idSet = new Set(agentIds);
+  for (const client of wss.clients) {
+    if (client === exclude) continue;
+    if (client.clientType !== 'agent') continue;
+    if (!idSet.has(client.agentId)) continue;
+    client.close();
+  }
+}
+
+function clearPendingActivation({ personality = null, agentId = null } = {}) {
+  let changed = false;
+  const clearAll = !personality && !agentId;
+  for (const [key, pending] of pendingActivations) {
+    if (clearAll) {
+      clearTimeout(pending.timer);
+      pendingActivations.delete(key);
+      changed = true;
+      continue;
+    }
+    const matchesPersonality = personality && pending.personality === personality;
+    const matchesAgentId = agentId && pending.agentId === agentId;
+    if (!matchesPersonality && !matchesAgentId) continue;
+    clearTimeout(pending.timer);
+    pendingActivations.delete(key);
+    changed = true;
+  }
+  if (changed) {
+    broadcast({ type: 'activation_update', pendingActivations: getPendingActivationsArray() });
+  }
+}
+
+function setPendingActivation(personality, agentId) {
+  clearPendingActivation({ personality });
+  const pending = {
+    agentId,
+    personality,
+    requestedAt: Date.now(),
+    timer: setTimeout(() => {
+      const current = pendingActivations.get(personality);
+      if (!current || current.agentId !== agentId) return;
+      pendingActivations.delete(personality);
+      console.warn(`[Agent] Activation timed out for ${personality}`);
+      broadcast({ type: 'activation_update', pendingActivations: getPendingActivationsArray() });
+    }, ACTIVATION_TIMEOUT_MS),
+  };
+  pendingActivations.set(personality, pending);
+  broadcast({ type: 'activation_update', pendingActivations: getPendingActivationsArray() });
+}
+
+function removeAgentsByName(name, keepAgentId = null) {
+  const removedIds = [];
+  for (const [id, agent] of agents) {
+    if (agent.name !== name) continue;
+    if (keepAgentId && id === keepAgentId) continue;
+    agents.delete(id);
+    agentLastToggle.delete(id);
+    removedIds.push(id);
+  }
+  return removedIds;
 }
 
 // --- Rate Limiter ---
@@ -194,14 +298,35 @@ function isInScope(agentId, row) {
   return row >= agent.scopeStart && row <= agent.scopeEnd;
 }
 
-// --- Agent Activation ---
-async function activateAgent(personality) {
-  const config = AGENT_POOL.find((a) => a.personality === personality);
-  if (!config) return;
-  for (const agent of agents.values()) {
-    if (agent.name === personality) return;
+async function clearOutOfScopeOwnedCells() {
+  const cleared = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let s = 0; s < STEPS; s++) {
+      if (!state.grid[r][s]) {
+        cellOwners[r][s] = null;
+        continue;
+      }
+      const ownerId = cellOwners[r][s];
+      if (!ownerId) continue;
+      if (!isInScope(ownerId, r)) {
+        state.grid[r][s] = false;
+        cellOwners[r][s] = null;
+        cleared.push({ row: r, step: s });
+      }
+    }
   }
-  const agentId = crypto.randomUUID();
+  if (cleared.length === 0) return;
+  await saveGridToRedis();
+  for (const cell of cleared) {
+    broadcast({ type: 'cell_toggle', row: cell.row, step: cell.step, value: false });
+  }
+}
+
+// --- Agent Activation ---
+async function activateAgent(personality, agentId = crypto.randomUUID()) {
+  const config = AGENT_POOL.find((a) => a.personality === personality);
+  if (!config) return null;
+  if (isAgentConnected(personality)) return null;
   const wsProto = process.env.WS_PROTO || 'wss';
   const host = process.env.WS_HOST || `localhost:${PORT}`;
   const wsEndpoint = `${wsProto}://${host}/ws`;
@@ -217,8 +342,13 @@ async function activateAgent(personality) {
         body: JSON.stringify(payload),
       });
       console.log(`[Agent] ${personality} activation response: ${res.status}`);
+      if (!res.ok) {
+        console.error(`[Agent] Activation failed for ${personality}: ${res.status}`);
+        return null;
+      }
     } catch (err) {
       console.error(`[Agent] Failed to activate ${personality}:`, err.message);
+      return null;
     }
   } else {
     console.log(`[Agent] No URL for ${personality}, agentId: ${agentId}`);
@@ -274,6 +404,7 @@ wss.on('connection', (ws) => {
     },
     agents: getAgentsArray(),
     discussion,
+    pendingActivations: getPendingActivationsArray(),
     users: count,
   });
   broadcast({ type: 'users', count }, ws);
@@ -286,9 +417,13 @@ wss.on('connection', (ws) => {
           const { agentId, name, color, description } = msg;
           ws.clientType = 'agent';
           ws.agentId = agentId;
+          clearPendingActivation({ personality: name, agentId });
+          const duplicateIds = removeAgentsByName(name, agentId);
+          closeAgentSocketsByIds(duplicateIds, ws);
           agents.set(agentId, { agentId, name, color, description, scopeStart: 0, scopeEnd: ROWS - 1 });
           recalculateScopes();
           await saveAgentsToRedis();
+          await clearOutOfScopeOwnedCells();
           const agent = agents.get(agentId);
           sendTo(ws, {
             type: 'scope_assigned',
@@ -311,8 +446,10 @@ wss.on('connection', (ws) => {
           if (agent) {
             agents.delete(agentId);
             agentLastToggle.delete(agentId);
+            clearPendingActivation({ personality: agent.name, agentId });
             recalculateScopes();
             await saveAgentsToRedis();
+            await clearOutOfScopeOwnedCells();
             broadcast({ type: 'scope_update', agents: getAgentsArray() });
           }
           break;
@@ -337,18 +474,21 @@ wss.on('connection', (ws) => {
             agentLastToggle.set(agentId, Date.now());
           }
           state.grid[row][step] = !state.grid[row][step];
+          cellOwners[row][step] = state.grid[row][step] ? agentId || null : null;
           await saveGridToRedis();
           broadcast({ type: 'cell_toggle', row, step, value: state.grid[row][step], agentId: agentId || null }, ws);
           break;
         }
         case 'agent_message': {
-          const chatMsg = {
+          const chatMsg = normalizeDiscussionMessage({
             agentId: msg.agentId,
             name: msg.name,
             color: msg.color,
+            kind: msg.kind,
+            agreement: msg.agreement,
             text: msg.text,
             timestamp: msg.timestamp || Date.now(),
-          };
+          });
           await addDiscussionMessage(chatMsg);
           broadcast({ type: 'agent_message', message: chatMsg });
           break;
@@ -356,22 +496,37 @@ wss.on('connection', (ws) => {
         case 'activate_agent': {
           const { personality } = msg;
           console.log(`[Browser] Requested activation of ${personality}`);
-          await activateAgent(personality);
+          if (isAgentConnected(personality) || pendingActivations.has(personality)) {
+            sendTo(ws, { type: 'scope_update', agents: getAgentsArray() });
+            sendTo(ws, { type: 'activation_update', pendingActivations: getPendingActivationsArray() });
+            break;
+          }
+          const agentId = crypto.randomUUID();
+          setPendingActivation(personality, agentId);
+          const activatedAgentId = await activateAgent(personality, agentId);
+          if (!activatedAgentId) {
+            clearPendingActivation({ personality, agentId });
+          }
           break;
         }
         case 'deactivate_agent': {
           const { personality } = msg;
           console.log(`[Browser] Requested deactivation of ${personality}`);
+          clearPendingActivation({ personality });
           let targetId = null;
           for (const [id, agent] of agents) {
             if (agent.name === personality) { targetId = id; break; }
           }
-          if (!targetId) break;
+          if (!targetId) {
+            sendTo(ws, { type: 'scope_update', agents: getAgentsArray() });
+            break;
+          }
           const agentData = agents.get(targetId);
           for (let r = agentData.scopeStart; r <= agentData.scopeEnd; r++) {
             for (let s = 0; s < STEPS; s++) {
               if (state.grid[r][s]) {
                 state.grid[r][s] = false;
+                cellOwners[r][s] = null;
                 broadcast({ type: 'cell_toggle', row: r, step: s, value: false });
               }
             }
@@ -381,6 +536,7 @@ wss.on('connection', (ws) => {
             agentId: targetId,
             name: agentData.name,
             color: agentData.color,
+            kind: 'chat',
             text: 'I am leaving',
             timestamp: Date.now(),
           };
@@ -390,6 +546,7 @@ wss.on('connection', (ws) => {
           agentLastToggle.delete(targetId);
           recalculateScopes();
           await saveAgentsToRedis();
+          await clearOutOfScopeOwnedCells();
           broadcast({ type: 'scope_update', agents: getAgentsArray() });
           for (const client of wss.clients) {
             if (client.agentId === targetId) { client.close(); break; }
@@ -402,6 +559,7 @@ wss.on('connection', (ws) => {
             for (let s = 0; s < STEPS; s++) {
               if (state.grid[r][s]) {
                 state.grid[r][s] = false;
+                cellOwners[r][s] = null;
                 broadcast({ type: 'cell_toggle', row: r, step: s, value: false });
               }
             }
@@ -413,6 +571,7 @@ wss.on('connection', (ws) => {
           }
           agents.clear();
           agentLastToggle.clear();
+          clearPendingActivation();
           await saveAgentsToRedis();
           broadcast({ type: 'scope_update', agents: [] });
           for (const client of agentClients) {
@@ -456,8 +615,10 @@ wss.on('connection', (ws) => {
         console.log(`[Agent] ${agent.name} disconnected (WS close)`);
         agents.delete(ws.agentId);
         agentLastToggle.delete(ws.agentId);
+        clearPendingActivation({ personality: agent.name, agentId: ws.agentId });
         recalculateScopes();
         await saveAgentsToRedis();
+        await clearOutOfScopeOwnedCells();
         broadcast({ type: 'scope_update', agents: getAgentsArray() });
       }
     }

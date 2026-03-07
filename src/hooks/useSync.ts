@@ -9,10 +9,35 @@ export type AgentScope = {
   scopeEnd: number;
 };
 
+export type PendingActivation = {
+  agentId: string;
+  personality: string;
+  requestedAt: number;
+};
+
+export type SongAgreement = {
+  id: string;
+  section: string;
+  density: string;
+  interaction: string;
+  pulseBias: string;
+  holdBars: number;
+  roles?: Array<{
+    agent: string;
+    task: string;
+  }>;
+  rosterSignature?: string;
+  proposedBy?: string;
+  createdAt?: number;
+  bpmAtCreation?: number;
+};
+
 export type AgentMessage = {
   agentId: string;
   name: string;
   color: string;
+  kind?: 'chat' | 'note' | 'plan';
+  agreement?: SongAgreement;
   text: string;
   timestamp: number;
 };
@@ -26,13 +51,19 @@ export type SyncState = {
 };
 
 type SyncCallbacks = {
-  onInit: (state: SyncState, agents: AgentScope[], discussion: AgentMessage[]) => void;
+  onInit: (
+    state: SyncState,
+    agents: AgentScope[],
+    discussion: AgentMessage[],
+    pendingActivations: PendingActivation[]
+  ) => void;
   onCellToggle: (row: number, step: number, value: boolean) => void;
   onBpmChange: (bpm: number) => void;
   onVolumeChange: (volume: number) => void;
   onMutedChange: (isMuted: boolean) => void;
   onPlayStateChange: (isPlaying: boolean) => void;
   onScopeUpdate: (agents: AgentScope[]) => void;
+  onActivationUpdate: (pendingActivations: PendingActivation[]) => void;
   onAgentMessage: (message: AgentMessage) => void;
   onResetDiscussion: () => void;
 };
@@ -58,7 +89,12 @@ export function useSync(callbacks: SyncCallbacks) {
       switch (msg.type) {
         case 'init':
           setConnectedUsers(msg.users);
-          cb.onInit(msg.state, msg.agents || [], msg.discussion || []);
+          cb.onInit(
+            msg.state,
+            msg.agents || [],
+            msg.discussion || [],
+            msg.pendingActivations || []
+          );
           break;
         case 'users':
           setConnectedUsers(msg.count);
@@ -80,6 +116,9 @@ export function useSync(callbacks: SyncCallbacks) {
           break;
         case 'scope_update':
           cb.onScopeUpdate(msg.agents);
+          break;
+        case 'activation_update':
+          cb.onActivationUpdate(msg.pendingActivations || []);
           break;
         case 'agent_message':
           cb.onAgentMessage(msg.message);

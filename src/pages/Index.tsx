@@ -6,7 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import AgentPanel from "@/components/AgentPanel";
 import AgentDiscussion from "@/components/AgentDiscussion";
-import { useSync, type AgentScope, type AgentMessage } from "@/hooks/useSync";
+import {
+  useSync,
+  type AgentScope,
+  type AgentMessage,
+  type PendingActivation,
+} from "@/hooks/useSync";
 
 const STEPS = 16;
 const ROWS = 16; // 4 rows per instrument: kick, guitar, piano, synth
@@ -56,6 +61,7 @@ const Index = () => {
   const [volume, setVolume] = useState(-6);
   const [isMuted, setIsMuted] = useState(false);
   const [agentScopes, setAgentScopes] = useState<AgentScope[]>([]);
+  const [pendingActivations, setPendingActivations] = useState<PendingActivation[]>([]);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
 
   const synthRef = useRef<Tone.PolySynth<Tone.Synth> | null>(null);
@@ -233,12 +239,13 @@ const Index = () => {
 
   // --- Sync ---
   const { send, connectedUsers } = useSync({
-    onInit(state, agents, discussion) {
+    onInit(state, agents, discussion, pending) {
       setGrid(state.grid.map((r) => [...r]));
       setBpm(state.bpm);
       setVolume(state.volume);
       setIsMuted(state.isMuted);
       setAgentScopes(agents);
+      setPendingActivations(pending);
       agentScopesRef.current = agents; // so sequencer sees correct instrument immediately
       setMessages(discussion);
       if (state.isPlaying) startSequencer();
@@ -266,6 +273,9 @@ const Index = () => {
     onScopeUpdate(agents) {
       setAgentScopes(agents);
       agentScopesRef.current = agents; // so sequencer uses PULSE/etc. right away
+    },
+    onActivationUpdate(pending) {
+      setPendingActivations(pending);
     },
     onAgentMessage(message) {
       setMessages((prev) => [...prev, message]);
@@ -450,6 +460,7 @@ const Index = () => {
               </div>
               <AgentPanel
                 connectedAgents={agentScopes}
+                pendingAgents={pendingActivations.map((activation) => activation.personality)}
                 onActivateAgent={handleActivateAgent}
                 onDeactivateAgent={handleDeactivateAgent}
               />

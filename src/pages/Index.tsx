@@ -34,6 +34,7 @@ const ROW_LABELS = [
 ];
 
 type Grid = boolean[][];
+type VelocityGrid = number[][];
 
 /** Instrument that can play notes and has a volume control (for mute/master). */
 type ChainSynth =
@@ -52,9 +53,12 @@ function isChainInstrument(
 
 const createEmptyGrid = (): Grid =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
+const createEmptyVelocityGrid = (): VelocityGrid =>
+  Array.from({ length: ROWS }, () => Array(STEPS).fill(0.8));
 
 const Index = () => {
   const [grid, setGrid] = useState<Grid>(createEmptyGrid);
+  const [velocityGrid, setVelocityGrid] = useState<VelocityGrid>(createEmptyVelocityGrid);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
   const [bpm, setBpm] = useState(120);
@@ -70,11 +74,16 @@ const Index = () => {
   const instrumentsRef = useRef<Record<string, PlayableInstrument>>({});
   const sequenceRef = useRef<Tone.Sequence | null>(null);
   const gridRef = useRef(grid);
+  const velocityGridRef = useRef(velocityGrid);
   const agentScopesRef = useRef<AgentScope[]>([]);
 
   useEffect(() => {
     gridRef.current = grid;
   }, [grid]);
+
+  useEffect(() => {
+    velocityGridRef.current = velocityGrid;
+  }, [velocityGrid]);
 
   useEffect(() => {
     agentScopesRef.current = agentScopes;
@@ -174,6 +183,7 @@ const Index = () => {
       (time, step) => {
         setCurrentStep(step);
         const g = gridRef.current;
+        const vg = velocityGridRef.current;
         const scopes = agentScopesRef.current;
         const instruments = instrumentsRef.current;
 
@@ -194,7 +204,8 @@ const Index = () => {
           const inst = instruments[key] ?? instruments.default;
           if (!inst) continue;
           const synth = isChainInstrument(inst) ? inst.synth : inst;
-          synth.triggerAttackRelease(NOTE_NAMES[row], "16n", time);
+          const velocity = Math.max(0.05, Math.min(1, vg[row]?.[step] ?? 0.8));
+          synth.triggerAttackRelease(NOTE_NAMES[row], "16n", time, velocity);
         }
       },
       Array.from({ length: STEPS }, (_, i) => i),
@@ -242,6 +253,7 @@ const Index = () => {
   const { send, connectedUsers } = useSync({
     onInit(state, agents, discussion, pending) {
       setGrid(state.grid.map((r) => [...r]));
+      setVelocityGrid((state.velocityGrid || createEmptyVelocityGrid()).map((r) => [...r]));
       setBpm(state.bpm);
       setVolume(state.volume);
       setIsMuted(state.isMuted);
@@ -251,10 +263,15 @@ const Index = () => {
       setMessages(discussion);
       if (state.isPlaying) startSequencer();
     },
-    onCellToggle(row, step, value) {
+    onCellToggle(row, step, value, velocity) {
       setGrid((prev) => {
         const next = prev.map((r) => [...r]);
         next[row][step] = value;
+        return next;
+      });
+      setVelocityGrid((prev) => {
+        const next = prev.map((r) => [...r]);
+        next[row][step] = value ? Math.max(0.05, Math.min(1, velocity ?? next[row][step] ?? 0.8)) : 0;
         return next;
       });
     },

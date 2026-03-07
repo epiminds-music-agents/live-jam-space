@@ -44,6 +44,7 @@ export type AgentMessage = {
 
 export type SyncState = {
   grid: boolean[][];
+  velocityGrid: number[][];
   bpm: number;
   volume: number;
   isMuted: boolean;
@@ -57,7 +58,7 @@ type SyncCallbacks = {
     discussion: AgentMessage[],
     pendingActivations: PendingActivation[]
   ) => void;
-  onCellToggle: (row: number, step: number, value: boolean) => void;
+  onCellToggle: (row: number, step: number, value: boolean, velocity?: number) => void;
   onBpmChange: (bpm: number) => void;
   onVolumeChange: (volume: number) => void;
   onMutedChange: (isMuted: boolean) => void;
@@ -100,7 +101,7 @@ export function useSync(callbacks: SyncCallbacks) {
           setConnectedUsers(msg.count);
           break;
         case 'cell_toggle':
-          cb.onCellToggle(msg.row, msg.step, msg.value);
+          cb.onCellToggle(msg.row, msg.step, msg.value, msg.velocity);
           break;
         case 'bpm_change':
           cb.onBpmChange(msg.bpm);

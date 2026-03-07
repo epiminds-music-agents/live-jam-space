@@ -70,11 +70,14 @@ async function connectRedis() {
 // --- In-memory state ---
 const createEmptyGrid = () =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
+const createEmptyVelocityGrid = () =>
+  Array.from({ length: ROWS }, () => Array(STEPS).fill(0));
 const createEmptyOwnerGrid = () =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(null));
 
 const state = {
   grid: createEmptyGrid(),
+  velocityGrid: createEmptyVelocityGrid(),
   bpm: 120,
   volume: -6,
   isMuted: false,
@@ -107,12 +110,15 @@ const pendingActivations = new Map();
 async function saveGridToRedis() {
   if (!redisConnected) return;
   const fields = {};
+  const velocityFields = {};
   for (let r = 0; r < ROWS; r++) {
     for (let s = 0; s < STEPS; s++) {
       fields[`r${r}s${s}`] = state.grid[r][s] ? '1' : '0';
+      velocityFields[`r${r}s${s}`] = String(state.velocityGrid[r][s] ?? 0);
     }
   }
   await redis.hset('jam:grid', fields);
+  await redis.hset('jam:velocity', velocityFields);
 }
 
 async function savePlaybackToRedis() {
@@ -147,10 +153,12 @@ async function addDiscussionMessage(msg) {
 async function loadStateFromRedis() {
   if (!redisConnected) return;
   const gridData = await redis.hgetall('jam:grid');
+  const velocityData = await redis.hgetall('jam:velocity');
   if (Object.keys(gridData).length > 0) {
     for (let r = 0; r < ROWS; r++) {
       for (let s = 0; s < STEPS; s++) {
         state.grid[r][s] = gridData[`r${r}s${s}`] === '1';
+        state.velocityGrid[r][s] = Number(velocityData[`r${r}s${s}`] || 0);
       }
     }
   }
@@ -310,6 +318,7 @@ async function clearOutOfScopeOwnedCells() {
       if (!ownerId) continue;
       if (!isInScope(ownerId, r)) {
         state.grid[r][s] = false;
+        state.velocityGrid[r][s] = 0;
         cellOwners[r][s] = null;
         cleared.push({ row: r, step: s });
       }
@@ -318,7 +327,7 @@ async function clearOutOfScopeOwnedCells() {
   if (cleared.length === 0) return;
   await saveGridToRedis();
   for (const cell of cleared) {
-    broadcast({ type: 'cell_toggle', row: cell.row, step: cell.step, value: false });
+    broadcast({ type: 'cell_toggle', row: cell.row, step: cell.step, value: false, velocity: 0 });
   }
 }
 
@@ -397,6 +406,7 @@ wss.on('connection', (ws) => {
     type: 'init',
     state: {
       grid: state.grid,
+      velocityGrid: state.velocityGrid,
       bpm: state.bpm,
       volume: state.volume,
       isMuted: state.isMuted,
@@ -431,6 +441,7 @@ wss.on('connection', (ws) => {
             scopeStart: agent.scopeStart,
             scopeEnd: agent.scopeEnd,
             currentGrid: state.grid,
+            currentVelocityGrid: state.velocityGrid,
             bpm: state.bpm,
             volume: state.volume,
             isPlaying: state.isPlaying,
@@ -455,7 +466,7 @@ wss.on('connection', (ws) => {
           break;
         }
         case 'cell_toggle': {
-          const { row, step, agentId } = msg;
+          const { row, step, agentId, velocity } = msg;
           if (row < 0 || row >= ROWS || step < 0 || step >= STEPS) break;
           if (agentId) {
             if (!state.isPlaying) {
@@ -474,9 +485,42 @@ wss.on('connection', (ws) => {
             agentLastToggle.set(agentId, Date.now());
           }
           state.grid[row][step] = !state.grid[row][step];
+          state.velocityGrid[row][step] = state.grid[row][step]
+            ? Math.max(0.05, Math.min(1, Number(velocity) || 0.8))
+            : 0;
           cellOwners[row][step] = state.grid[row][step] ? agentId || null : null;
           await saveGridToRedis();
-          broadcast({ type: 'cell_toggle', row, step, value: state.grid[row][step], agentId: agentId || null }, ws);
+          broadcast({ type: 'cell_toggle', row, step, value: state.grid[row][step], velocity: state.velocityGrid[row][step], agentId: agentId || null }, ws);
+          break;
+        }
+        case 'cell_set': {
+          const { row, step, value, velocity, agentId } = msg;
+          if (row < 0 || row >= ROWS || step < 0 || step >= STEPS) break;
+          if (agentId) {
+            if (!state.isPlaying) {
+              sendTo(ws, { type: 'cell_rejected', agentId, row, step, reason: 'not_playing' });
+              break;
+            }
+            if (!isInScope(agentId, row)) {
+              sendTo(ws, { type: 'cell_rejected', agentId, row, step, reason: 'out_of_scope' });
+              break;
+            }
+            const check = canAgentToggle(agentId);
+            if (!check.allowed) {
+              sendTo(ws, { type: 'cell_rejected', agentId, row, step, reason: check.reason });
+              break;
+            }
+            agentLastToggle.set(agentId, Date.now());
+          }
+          const newValue = Boolean(value);
+          if (state.grid[row][step] === newValue) break;
+          state.grid[row][step] = newValue;
+          state.velocityGrid[row][step] = newValue
+            ? Math.max(0.05, Math.min(1, Number(velocity) || state.velocityGrid[row][step] || 0.8))
+            : 0;
+          cellOwners[row][step] = newValue ? agentId || null : null;
+          await saveGridToRedis();
+          broadcast({ type: 'cell_toggle', row, step, value: newValue, velocity: state.velocityGrid[row][step], agentId: agentId || null }, ws);
           break;
         }
         case 'agent_message': {
@@ -526,8 +570,9 @@ wss.on('connection', (ws) => {
             for (let s = 0; s < STEPS; s++) {
               if (state.grid[r][s]) {
                 state.grid[r][s] = false;
+                state.velocityGrid[r][s] = 0;
                 cellOwners[r][s] = null;
-                broadcast({ type: 'cell_toggle', row: r, step: s, value: false });
+                broadcast({ type: 'cell_toggle', row: r, step: s, value: false, velocity: 0 });
               }
             }
           }
@@ -559,8 +604,9 @@ wss.on('connection', (ws) => {
             for (let s = 0; s < STEPS; s++) {
               if (state.grid[r][s]) {
                 state.grid[r][s] = false;
+                state.velocityGrid[r][s] = 0;
                 cellOwners[r][s] = null;
-                broadcast({ type: 'cell_toggle', row: r, step: s, value: false });
+                broadcast({ type: 'cell_toggle', row: r, step: s, value: false, velocity: 0 });
               }
             }
           }

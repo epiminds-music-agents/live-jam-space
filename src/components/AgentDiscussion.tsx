@@ -1,14 +1,25 @@
 import { useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import type { AgentScope, AgentMessage } from "@/hooks/useSync";
 
 type AgentDiscussionProps = {
   messages: AgentMessage[];
   agents: AgentScope[];
+  humanPrompt: string;
+  onHumanPromptChange: (value: string) => void;
+  onSendHumanPrompt: () => void;
 };
 
-const AgentDiscussion = ({ messages, agents }: AgentDiscussionProps) => {
+const AgentDiscussion = ({
+  messages,
+  agents,
+  humanPrompt,
+  onHumanPromptChange,
+  onSendHumanPrompt,
+}: AgentDiscussionProps) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -119,6 +130,29 @@ const AgentDiscussion = ({ messages, agents }: AgentDiscussionProps) => {
         )}
         <div ref={bottomRef} />
       </ScrollArea>
+
+      <div className="border-t border-border bg-card/40 p-3">
+        <div className="mb-2 text-[10px] tracking-[0.25em] text-muted-foreground">
+          DIRECTOR PROMPT
+        </div>
+        <div className="flex gap-2">
+          <Input
+            value={humanPrompt}
+            onChange={(event) => onHumanPromptChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onSendHumanPrompt();
+              }
+            }}
+            placeholder='e.g. "Swedish House Mafia", "darker and sparse", "big euphoric build"'
+            className="h-9 text-sm"
+          />
+          <Button onClick={onSendHumanPrompt} className="h-9 shrink-0">
+            Send
+          </Button>
+        </div>
+      </div>
     </div>
   );
 };

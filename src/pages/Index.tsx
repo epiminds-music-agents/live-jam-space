@@ -63,6 +63,7 @@ const Index = () => {
   const [agentScopes, setAgentScopes] = useState<AgentScope[]>([]);
   const [pendingActivations, setPendingActivations] = useState<PendingActivation[]>([]);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [humanPrompt, setHumanPrompt] = useState("");
 
   const synthRef = useRef<Tone.PolySynth<Tone.Synth> | null>(null);
   /** Per-agent instruments. Keys: agent name (e.g. "PULSE") or "default". */
@@ -337,6 +338,21 @@ const Index = () => {
     send({ type: "reset_session" });
   }, [send]);
 
+  const handleSendHumanPrompt = useCallback(() => {
+    const text = humanPrompt.trim();
+    if (!text) return;
+    send({
+      type: "agent_message",
+      agentId: "",
+      name: "DIRECTOR",
+      color: "hsl(12, 90%, 65%)",
+      kind: "chat",
+      text,
+      timestamp: Date.now(),
+    });
+    setHumanPrompt("");
+  }, [humanPrompt, send]);
+
   // --- Scope helpers ---
   function getRowOwner(rowIdx: number): AgentScope | undefined {
     return agentScopes.find(
@@ -605,7 +621,13 @@ const Index = () => {
             transition={{ delay: 0.4 }}
             className="lg:h-[calc(100vh-12rem)] min-h-[400px]"
           >
-            <AgentDiscussion messages={messages} agents={agentScopes} />
+            <AgentDiscussion
+              messages={messages}
+              agents={agentScopes}
+              humanPrompt={humanPrompt}
+              onHumanPromptChange={setHumanPrompt}
+              onSendHumanPrompt={handleSendHumanPrompt}
+            />
           </motion.div>
         </div>
       </div>

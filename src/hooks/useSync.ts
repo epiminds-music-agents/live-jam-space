@@ -22,6 +22,9 @@ export type SongAgreement = {
   interaction: string;
   pulseBias: string;
   holdBars: number;
+  swing?: number;
+  noteLength?: string;
+  accentPattern?: string;
   roles?: Array<{
     agent: string;
     task: string;
@@ -45,6 +48,7 @@ export type AgentMessage = {
 export type SyncState = {
   grid: boolean[][];
   velocityGrid: number[][];
+  lengthGrid: string[][];
   bpm: number;
   volume: number;
   isMuted: boolean;
@@ -58,7 +62,7 @@ type SyncCallbacks = {
     discussion: AgentMessage[],
     pendingActivations: PendingActivation[]
   ) => void;
-  onCellToggle: (row: number, step: number, value: boolean, velocity?: number) => void;
+  onCellToggle: (row: number, step: number, value: boolean, velocity?: number, length?: string) => void;
   onBpmChange: (bpm: number) => void;
   onVolumeChange: (volume: number) => void;
   onMutedChange: (isMuted: boolean) => void;
@@ -101,7 +105,7 @@ export function useSync(callbacks: SyncCallbacks) {
           setConnectedUsers(msg.count);
           break;
         case 'cell_toggle':
-          cb.onCellToggle(msg.row, msg.step, msg.value, msg.velocity);
+          cb.onCellToggle(msg.row, msg.step, msg.value, msg.velocity, msg.length);
           break;
         case 'bpm_change':
           cb.onBpmChange(msg.bpm);

@@ -35,6 +35,7 @@ const ROW_LABELS = [
 
 type Grid = boolean[][];
 type VelocityGrid = number[][];
+type LengthGrid = string[][];
 
 /** Instrument that can play notes and has a volume control (for mute/master). */
 type ChainSynth =
@@ -55,10 +56,13 @@ const createEmptyGrid = (): Grid =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
 const createEmptyVelocityGrid = (): VelocityGrid =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(0.8));
+const createEmptyLengthGrid = (): LengthGrid =>
+  Array.from({ length: ROWS }, () => Array(STEPS).fill("16n"));
 
 const Index = () => {
   const [grid, setGrid] = useState<Grid>(createEmptyGrid);
   const [velocityGrid, setVelocityGrid] = useState<VelocityGrid>(createEmptyVelocityGrid);
+  const [lengthGrid, setLengthGrid] = useState<LengthGrid>(createEmptyLengthGrid);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
   const [bpm, setBpm] = useState(120);
@@ -75,7 +79,9 @@ const Index = () => {
   const sequenceRef = useRef<Tone.Sequence | null>(null);
   const gridRef = useRef(grid);
   const velocityGridRef = useRef(velocityGrid);
+  const lengthGridRef = useRef(lengthGrid);
   const agentScopesRef = useRef<AgentScope[]>([]);
+  const activeAgreementRef = useRef<AgentMessage["agreement"] | null>(null);
 
   useEffect(() => {
     gridRef.current = grid;
@@ -86,8 +92,37 @@ const Index = () => {
   }, [velocityGrid]);
 
   useEffect(() => {
+    lengthGridRef.current = lengthGrid;
+  }, [lengthGrid]);
+
+  useEffect(() => {
     agentScopesRef.current = agentScopes;
   }, [agentScopes]);
+
+  useEffect(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.agreement) {
+        activeAgreementRef.current = messages[i].agreement;
+        return;
+      }
+    }
+    activeAgreementRef.current = null;
+  }, [messages]);
+
+  const getAccentMultiplier = (step: number, accentPattern?: string) => {
+    switch ((accentPattern || "").toLowerCase()) {
+      case "four_on_floor":
+        return step % 4 === 0 ? 1.2 : 0.88;
+      case "backbeat":
+        return step % 8 === 4 ? 1.22 : step % 4 === 0 ? 0.95 : 0.9;
+      case "push":
+        return step % 4 === 3 ? 1.18 : step % 4 === 0 ? 0.94 : 0.9;
+      case "syncopated":
+        return step % 4 === 2 || step % 4 === 3 ? 1.14 : 0.92;
+      default:
+        return 1;
+    }
+  };
 
   const initAudio = useCallback(async () => {
     await Tone.start();
@@ -174,6 +209,8 @@ const Index = () => {
     if (!synthRef.current) return;
 
     Tone.getTransport().bpm.value = bpm;
+    Tone.getTransport().swing = Math.max(0, Math.min(0.6, activeAgreementRef.current?.swing ?? 0));
+    Tone.getTransport().swingSubdivision = "8n";
 
     if (sequenceRef.current) {
       sequenceRef.current.dispose();
@@ -184,8 +221,10 @@ const Index = () => {
         setCurrentStep(step);
         const g = gridRef.current;
         const vg = velocityGridRef.current;
+        const lg = lengthGridRef.current;
         const scopes = agentScopesRef.current;
         const instruments = instrumentsRef.current;
+        const agreement = activeAgreementRef.current;
 
         // When only one agent is PULSE, use slap bass for all rows (robust across servers)
         const onlyPulse =
@@ -204,8 +243,10 @@ const Index = () => {
           const inst = instruments[key] ?? instruments.default;
           if (!inst) continue;
           const synth = isChainInstrument(inst) ? inst.synth : inst;
-          const velocity = Math.max(0.05, Math.min(1, vg[row]?.[step] ?? 0.8));
-          synth.triggerAttackRelease(NOTE_NAMES[row], "16n", time, velocity);
+          const baseVelocity = Math.max(0.05, Math.min(1, vg[row]?.[step] ?? 0.8));
+          const velocity = Math.max(0.05, Math.min(1, baseVelocity * getAccentMultiplier(step, agreement?.accentPattern)));
+          const length = lg[row]?.[step] || agreement?.noteLength || "16n";
+          synth.triggerAttackRelease(NOTE_NAMES[row], length, time, velocity);
         }
       },
       Array.from({ length: STEPS }, (_, i) => i),
@@ -231,8 +272,9 @@ const Index = () => {
   useEffect(() => {
     if (isPlaying) {
       Tone.getTransport().bpm.value = bpm;
+      Tone.getTransport().swing = Math.max(0, Math.min(0.6, activeAgreementRef.current?.swing ?? 0));
     }
-  }, [bpm, isPlaying]);
+  }, [bpm, isPlaying, messages]);
 
   useEffect(() => {
     const v = isMuted ? -Infinity : volume;
@@ -254,6 +296,7 @@ const Index = () => {
     onInit(state, agents, discussion, pending) {
       setGrid(state.grid.map((r) => [...r]));
       setVelocityGrid((state.velocityGrid || createEmptyVelocityGrid()).map((r) => [...r]));
+      setLengthGrid((state.lengthGrid || createEmptyLengthGrid()).map((r) => [...r]));
       setBpm(state.bpm);
       setVolume(state.volume);
       setIsMuted(state.isMuted);
@@ -263,7 +306,7 @@ const Index = () => {
       setMessages(discussion);
       if (state.isPlaying) startSequencer();
     },
-    onCellToggle(row, step, value, velocity) {
+    onCellToggle(row, step, value, velocity, length) {
       setGrid((prev) => {
         const next = prev.map((r) => [...r]);
         next[row][step] = value;
@@ -272,6 +315,11 @@ const Index = () => {
       setVelocityGrid((prev) => {
         const next = prev.map((r) => [...r]);
         next[row][step] = value ? Math.max(0.05, Math.min(1, velocity ?? next[row][step] ?? 0.8)) : 0;
+        return next;
+      });
+      setLengthGrid((prev) => {
+        const next = prev.map((r) => [...r]);
+        next[row][step] = value ? (length || next[row][step] || "16n") : "";
         return next;
       });
     },

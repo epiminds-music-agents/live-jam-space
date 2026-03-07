@@ -79,12 +79,15 @@ const createEmptyGrid = () =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
 const createEmptyVelocityGrid = () =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(0));
+const createEmptyLengthGrid = () =>
+  Array.from({ length: ROWS }, () => Array(STEPS).fill('16n'));
 const createEmptyOwnerGrid = () =>
   Array.from({ length: ROWS }, () => Array(STEPS).fill(null));
 
 const state = {
   grid: createEmptyGrid(),
   velocityGrid: createEmptyVelocityGrid(),
+  lengthGrid: createEmptyLengthGrid(),
   bpm: 120,
   volume: -6,
   isMuted: false,
@@ -122,14 +125,17 @@ async function saveGridToRedis() {
   if (!redisConnected) return;
   const fields = {};
   const velocityFields = {};
+  const lengthFields = {};
   for (let r = 0; r < ROWS; r++) {
     for (let s = 0; s < STEPS; s++) {
       fields[`r${r}s${s}`] = state.grid[r][s] ? '1' : '0';
       velocityFields[`r${r}s${s}`] = String(state.velocityGrid[r][s] ?? 0);
+      lengthFields[`r${r}s${s}`] = state.lengthGrid[r][s] || '16n';
     }
   }
   await redis.hset('jam:grid', fields);
   await redis.hset('jam:velocity', velocityFields);
+  await redis.hset('jam:length', lengthFields);
 }
 
 async function savePlaybackToRedis() {
@@ -166,11 +172,13 @@ async function loadStateFromRedis() {
   // Load grid
   const gridData = await redis.hgetall('jam:grid');
   const velocityData = await redis.hgetall('jam:velocity');
+  const lengthData = await redis.hgetall('jam:length');
   if (Object.keys(gridData).length > 0) {
     for (let r = 0; r < ROWS; r++) {
       for (let s = 0; s < STEPS; s++) {
         state.grid[r][s] = gridData[`r${r}s${s}`] === '1';
         state.velocityGrid[r][s] = Number(velocityData[`r${r}s${s}`] || 0);
+        state.lengthGrid[r][s] = lengthData[`r${r}s${s}`] || '16n';
       }
     }
   }
@@ -333,6 +341,7 @@ async function clearOutOfScopeOwnedCells() {
       if (!isInScope(ownerId, r)) {
         state.grid[r][s] = false;
         state.velocityGrid[r][s] = 0;
+        state.lengthGrid[r][s] = '16n';
         cellOwners[r][s] = null;
         cleared.push({ row: r, step: s });
       }
@@ -341,7 +350,7 @@ async function clearOutOfScopeOwnedCells() {
   if (cleared.length === 0) return;
   await saveGridToRedis();
   for (const cell of cleared) {
-    broadcast({ type: 'cell_toggle', row: cell.row, step: cell.step, value: false, velocity: 0 });
+    broadcast({ type: 'cell_toggle', row: cell.row, step: cell.step, value: false, velocity: 0, length: '16n' });
   }
 }
 
@@ -427,6 +436,7 @@ wss.on('connection', (ws) => {
     state: {
       grid: state.grid,
       velocityGrid: state.velocityGrid,
+      lengthGrid: state.lengthGrid,
       bpm: state.bpm,
       volume: state.volume,
       isMuted: state.isMuted,
@@ -473,6 +483,7 @@ wss.on('connection', (ws) => {
             scopeEnd: agent.scopeEnd,
             currentGrid: state.grid,
             currentVelocityGrid: state.velocityGrid,
+            currentLengthGrid: state.lengthGrid,
             bpm: state.bpm,
             volume: state.volume,
             isPlaying: state.isPlaying,
@@ -504,7 +515,7 @@ wss.on('connection', (ws) => {
 
         // --- Cell toggle (agent or browser - but browser is now read-only in UI) ---
         case 'cell_toggle': {
-          const { row, step, agentId, velocity } = msg;
+          const { row, step, agentId, velocity, length } = msg;
           if (row < 0 || row >= ROWS || step < 0 || step >= STEPS) break;
 
           // If from an agent, enforce rules
@@ -532,15 +543,18 @@ wss.on('connection', (ws) => {
           state.velocityGrid[row][step] = state.grid[row][step]
             ? Math.max(0.05, Math.min(1, Number(velocity) || 0.8))
             : 0;
+          state.lengthGrid[row][step] = state.grid[row][step]
+            ? (length === '32n' || length === '8n' || length === '4n' ? length : '16n')
+            : '16n';
           cellOwners[row][step] = state.grid[row][step] ? agentId || null : null;
           await saveGridToRedis();
-          broadcast({ type: 'cell_toggle', row, step, value: state.grid[row][step], velocity: state.velocityGrid[row][step], agentId: agentId || null }, ws);
+          broadcast({ type: 'cell_toggle', row, step, value: state.grid[row][step], velocity: state.velocityGrid[row][step], length: state.lengthGrid[row][step], agentId: agentId || null }, ws);
           break;
         }
 
         // --- Cell set (agent sets cell to explicit value instead of toggling) ---
         case 'cell_set': {
-          const { row, step, value, velocity, agentId } = msg;
+          const { row, step, value, velocity, length, agentId } = msg;
           if (row < 0 || row >= ROWS || step < 0 || step >= STEPS) break;
 
           if (agentId) {
@@ -566,9 +580,12 @@ wss.on('connection', (ws) => {
           state.velocityGrid[row][step] = newValue
             ? Math.max(0.05, Math.min(1, Number(velocity) || state.velocityGrid[row][step] || 0.8))
             : 0;
+          state.lengthGrid[row][step] = newValue
+            ? (length === '32n' || length === '8n' || length === '4n' ? length : state.lengthGrid[row][step] || '16n')
+            : '16n';
           cellOwners[row][step] = newValue ? agentId || null : null;
           await saveGridToRedis();
-          broadcast({ type: 'cell_toggle', row, step, value: newValue, velocity: state.velocityGrid[row][step], agentId: agentId || null }, ws);
+          broadcast({ type: 'cell_toggle', row, step, value: newValue, velocity: state.velocityGrid[row][step], length: state.lengthGrid[row][step], agentId: agentId || null }, ws);
           break;
         }
 
@@ -626,8 +643,9 @@ wss.on('connection', (ws) => {
               if (state.grid[r][s]) {
                 state.grid[r][s] = false;
                 state.velocityGrid[r][s] = 0;
+                state.lengthGrid[r][s] = '16n';
                 cellOwners[r][s] = null;
-                broadcast({ type: 'cell_toggle', row: r, step: s, value: false, velocity: 0 });
+                broadcast({ type: 'cell_toggle', row: r, step: s, value: false, velocity: 0, length: '16n' });
               }
             }
           }
@@ -665,8 +683,9 @@ wss.on('connection', (ws) => {
               if (state.grid[r][s]) {
                 state.grid[r][s] = false;
                 state.velocityGrid[r][s] = 0;
+                state.lengthGrid[r][s] = '16n';
                 cellOwners[r][s] = null;
-                broadcast({ type: 'cell_toggle', row: r, step: s, value: false, velocity: 0 });
+                broadcast({ type: 'cell_toggle', row: r, step: s, value: false, velocity: 0, length: '16n' });
               }
             }
           }

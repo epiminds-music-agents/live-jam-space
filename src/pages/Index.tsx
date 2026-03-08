@@ -586,12 +586,11 @@ const Index = () => {
                               key={colIdx}
                               className={`
                                 flex-1 aspect-square rounded-sm transition-all duration-75 border
-                                ${
-                                  active
-                                    ? "border-current grid-cell-active"
-                                    : isBeat
-                                      ? "bg-muted/60 border-border/60"
-                                      : "bg-muted/30 border-border/30"
+                                ${active
+                                  ? "border-current grid-cell-active"
+                                  : isBeat
+                                    ? "bg-muted/60 border-border/60"
+                                    : "bg-muted/30 border-border/30"
                                 }
                                 ${isCurrentStep && active ? "grid-cell-playing" : ""}
                                 ${isCurrentStep && !active ? "border-secondary/40" : ""}
@@ -599,15 +598,15 @@ const Index = () => {
                               style={
                                 active && owner
                                   ? {
-                                      backgroundColor: owner.color + "44",
-                                      borderColor: owner.color,
-                                      boxShadow: `0 0 8px ${owner.color}55`,
-                                    }
+                                    backgroundColor: owner.color + "44",
+                                    borderColor: owner.color,
+                                    boxShadow: `0 0 8px ${owner.color}55`,
+                                  }
                                   : active
                                     ? {
-                                        backgroundColor: "hsl(var(--primary) / 0.8)",
-                                        borderColor: "hsl(var(--primary))",
-                                      }
+                                      backgroundColor: "hsl(var(--primary) / 0.8)",
+                                      borderColor: "hsl(var(--primary))",
+                                    }
                                     : undefined
                               }
                             />
@@ -624,13 +623,12 @@ const Index = () => {
                   {Array.from({ length: STEPS }, (_, i) => (
                     <div
                       key={i}
-                      className={`flex-1 text-center text-[8px] font-bold ${
-                        currentStep === i && isPlaying
+                      className={`flex-1 text-center text-[8px] font-bold ${currentStep === i && isPlaying
                           ? "text-secondary"
                           : i % 4 === 0
                             ? "text-muted-foreground"
                             : "text-muted-foreground/40"
-                      }`}
+                        }`}
                       style={{ fontFamily: "Orbitron, monospace" }}
                     >
                       {i + 1}

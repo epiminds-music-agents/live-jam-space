@@ -9,6 +9,12 @@ env:
   REGION: ${{ secrets.GCP_REGION }}
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   REPO_NAME: live-jam-space
+  AGENT_PULSE_URL: ${{ secrets.AGENT_PULSE_URL }}
+  AGENT_GHOST_URL: ${{ secrets.AGENT_GHOST_URL }}
+  AGENT_CHAOS_URL: ${{ secrets.AGENT_CHAOS_URL }}
+  AGENT_WAVE_URL: ${{ secrets.AGENT_WAVE_URL }}
+  WS_PROTO: ${{ vars.WS_PROTO || 'wss' }}
+  WS_HOST: ${{ vars.WS_HOST }}
 
 jobs:
   deploy:
@@ -43,4 +49,5 @@ jobs:
             --platform managed \
             --timeout=3600 \
             --session-affinity \
-            --allow-unauthenticated
+            --allow-unauthenticated \
+            --set-env-vars "AGENT_PULSE_URL=${{ env.AGENT_PULSE_URL }},AGENT_GHOST_URL=${{ env.AGENT_GHOST_URL }},AGENT_CHAOS_URL=${{ env.AGENT_CHAOS_URL }},AGENT_WAVE_URL=${{ env.AGENT_WAVE_URL }},WS_PROTO=${{ env.WS_PROTO }},WS_HOST=${{ env.WS_HOST }}"

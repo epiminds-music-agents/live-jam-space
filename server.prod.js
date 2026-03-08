@@ -13,6 +13,8 @@ const ROWS = 16; // 4 rows per instrument (PULSE, WAVE, GHOST, CHAOS/default)
 const STEPS = 16;
 const DISCUSSION_CAP = 500;
 const ACTIVATION_TIMEOUT_MS = 15000;
+let inferredPublicWsProto = null;
+let inferredPublicWsHost = null;
 
 // --- Agent Pool ---
 const AGENT_POOL = [
@@ -261,6 +263,26 @@ function clearPendingActivation({ personality = null, agentId = null } = {}) {
   }
 }
 
+function toWebSocketProto(forwardedProto) {
+  if (!forwardedProto) return null;
+  if (forwardedProto === 'https') return 'wss';
+  if (forwardedProto === 'http') return 'ws';
+  if (forwardedProto === 'wss' || forwardedProto === 'ws') return forwardedProto;
+  return null;
+}
+
+function rememberPublicWebSocketTarget(req) {
+  const forwardedProtoHeader = req.headers['x-forwarded-proto'];
+  const forwardedProto = Array.isArray(forwardedProtoHeader)
+    ? forwardedProtoHeader[0]
+    : forwardedProtoHeader?.split(',')[0]?.trim();
+  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host;
+  const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+  const wsProto = toWebSocketProto(forwardedProto);
+  if (wsProto) inferredPublicWsProto = wsProto;
+  if (host) inferredPublicWsHost = host.trim();
+}
+
 function setPendingActivation(personality, agentId) {
   clearPendingActivation({ personality });
   const pending = {
@@ -345,8 +367,8 @@ async function activateAgent(personality, agentId = crypto.randomUUID()) {
   const config = AGENT_POOL.find((a) => a.personality === personality);
   if (!config) return null;
   if (isAgentConnected(personality)) return null;
-  const wsProto = process.env.WS_PROTO || 'wss';
-  const host = process.env.WS_HOST || `localhost:${PORT}`;
+  const wsProto = process.env.WS_PROTO || inferredPublicWsProto || 'wss';
+  const host = process.env.WS_HOST || inferredPublicWsHost || `localhost:${PORT}`;
   const wsEndpoint = `${wsProto}://${host}/ws`;
 
   const payload = { wsEndpoint, agentId, personality: config.personality, color: config.color };
@@ -404,7 +426,8 @@ function getBrowserCount() {
   return count;
 }
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  rememberPublicWebSocketTarget(req);
   ws.clientType = 'browser';
   ws.agentId = null;
 

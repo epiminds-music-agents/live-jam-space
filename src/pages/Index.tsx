@@ -430,129 +430,116 @@ const Index = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background relative overflow-hidden">
-      {/* Scanline overlay */}
-      <div className="scanline fixed inset-0 z-50" />
-
-      <div className="relative z-10 max-w-7xl mx-auto px-4 py-8">
-        {/* Header */}
+    <div className="min-h-screen bg-background">
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Header + Controls — single row */}
         <motion.div
-          initial={{ opacity: 0, y: -20 }}
+          initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-center mb-8"
+          className="flex flex-wrap items-center gap-3 mb-4"
         >
-          <h1
-            className="text-4xl md:text-5xl font-bold tracking-widest text-primary mb-2"
-            style={{ fontFamily: "Orbitron, monospace" }}
+          {/* Title */}
+          <div className="mr-2">
+            <h1 className="text-base font-semibold tracking-tight text-foreground leading-none mb-0.5">
+              Music Agents
+            </h1>
+            <p className="text-muted-foreground text-[10px] tracking-[0.2em] uppercase leading-none" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+              AI-Agent Live Sequencer
+            </p>
+          </div>
+
+          <div className="w-px h-8 bg-border/50 hidden sm:block" />
+          <Button
+            onClick={isPlaying ? handleStop : handlePlay}
+            className="gap-2 font-medium tracking-wide"
+            size="default"
           >
-            Music Agents
-          </h1>
-          <p className="text-muted-foreground text-sm tracking-[0.3em] uppercase">
-            ai-agent-first live jam space
-          </p>
+            {isPlaying ? (
+              <Square className="w-4 h-4" />
+            ) : (
+              <Play className="w-4 h-4" />
+            )}
+            {isPlaying ? "STOP" : "PLAY"}
+          </Button>
+
+          <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
+            <span className="text-xs text-muted-foreground w-8">BPM</span>
+            <Slider
+              value={[bpm]}
+              onValueChange={([v]) => handleBpm(v)}
+              min={60}
+              max={200}
+              step={1}
+              className="w-28"
+            />
+            <span className="text-primary text-sm font-bold w-8">
+              {bpm}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
+            <button
+              onClick={handleMute}
+              className="text-muted-foreground hover:text-primary"
+            >
+              {isMuted ? (
+                <VolumeX className="w-4 h-4" />
+              ) : (
+                <Volume2 className="w-4 h-4" />
+              )}
+            </button>
+            <Slider
+              value={[volume]}
+              onValueChange={([v]) => handleVolume(v)}
+              min={-30}
+              max={0}
+              step={1}
+              className="w-20"
+            />
+          </div>
         </motion.div>
 
-        {/* 2-column layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6">
-          {/* Left column: controls + grid */}
-          <div>
-            {/* Controls */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.2 }}
-              className="flex flex-wrap items-center gap-3 mb-6"
-            >
+        {/* Agents — full width */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.25 }}
+          className="mb-4"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-[11px] font-semibold tracking-[0.2em] text-muted-foreground uppercase" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+              Agents
+            </h2>
+            {agentScopes.length > 0 && (
               <Button
-                onClick={isPlaying ? handleStop : handlePlay}
-                className="gap-2 font-bold tracking-wider border border-primary bg-primary/10 text-primary hover:bg-primary/20"
-                size="lg"
+                onClick={handleReset}
+                variant="destructive"
+                size="sm"
+                className="text-[10px] tracking-wider gap-1.5 h-6"
               >
-                {isPlaying ? (
-                  <Square className="w-4 h-4" />
-                ) : (
-                  <Play className="w-4 h-4" />
-                )}
-                {isPlaying ? "STOP" : "PLAY"}
+                <RotateCcw className="w-3 h-3" />
+                RESET ALL
               </Button>
+            )}
+          </div>
+          <AgentPanel
+            connectedAgents={agentScopes}
+            pendingAgents={pendingActivations.map((activation) => activation.personality)}
+            onActivateAgent={handleActivateAgent}
+            onDeactivateAgent={handleDeactivateAgent}
+          />
+        </motion.div>
 
-              <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
-                <span className="text-xs text-muted-foreground w-8">BPM</span>
-                <Slider
-                  value={[bpm]}
-                  onValueChange={([v]) => handleBpm(v)}
-                  min={60}
-                  max={200}
-                  step={1}
-                  className="w-28"
-                />
-                <span className="text-primary text-sm font-bold w-8">
-                  {bpm}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 border border-border">
-                <button
-                  onClick={handleMute}
-                  className="text-muted-foreground hover:text-primary"
-                >
-                  {isMuted ? (
-                    <VolumeX className="w-4 h-4" />
-                  ) : (
-                    <Volume2 className="w-4 h-4" />
-                  )}
-                </button>
-                <Slider
-                  value={[volume]}
-                  onValueChange={([v]) => handleVolume(v)}
-                  min={-30}
-                  max={0}
-                  step={1}
-                  className="w-20"
-                />
-              </div>
-            </motion.div>
-
-            {/* Agent Buttons */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.25 }}
-              className="mb-4"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <h2
-                  className="text-xs font-bold tracking-[0.3em] text-muted-foreground"
-                  style={{ fontFamily: "Orbitron, monospace" }}
-                >
-                  AGENTS
-                </h2>
-                {agentScopes.length > 0 && (
-                  <Button
-                    onClick={handleReset}
-                    variant="destructive"
-                    size="sm"
-                    className="text-[10px] tracking-wider gap-1.5 h-6"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    RESET ALL
-                  </Button>
-                )}
-              </div>
-              <AgentPanel
-                connectedAgents={agentScopes}
-                pendingAgents={pendingActivations.map((activation) => activation.personality)}
-                onActivateAgent={handleActivateAgent}
-                onDeactivateAgent={handleDeactivateAgent}
-              />
-            </motion.div>
-
-            {/* Grid — 16 rows × 16 steps, scroll when needed */}
+        {/* 2-column layout: grid + chat, same height */}
+        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6 lg:h-[calc(100vh-14rem)]">
+          {/* Left column: grid + status */}
+          <div className="flex flex-col min-h-0">
+            {/* Grid — 16 rows × 16 steps */}
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.3 }}
-              className="border border-border rounded-lg bg-card/50 p-3 md:p-4 overflow-auto max-h-[70vh]"
+              className="flex-1 border border-border/60 rounded-md bg-card/40 p-2 md:p-3 overflow-auto min-h-0"
             >
               <div className="min-w-[640px]">
                 {grid.map((row, rowIdx) => {
@@ -569,9 +556,9 @@ const Index = () => {
                       )}
                       <div className="flex items-center gap-1 mb-1">
                         <span
-                          className="w-10 text-[10px] font-bold tracking-wider text-right pr-2 shrink-0"
+                          className="w-10 text-[10px] font-medium tracking-wider text-right pr-2 shrink-0"
                           style={{
-                            fontFamily: "Orbitron, monospace",
+                            fontFamily: "'JetBrains Mono', monospace",
                             color: owner?.color || "hsl(var(--muted-foreground))",
                           }}
                         >
@@ -585,27 +572,26 @@ const Index = () => {
                             <div
                               key={colIdx}
                               className={`
-                                flex-1 aspect-square rounded-sm transition-all duration-75 border
+                                flex-1 aspect-square transition-all duration-75 border
                                 ${active
-                                  ? "border-current grid-cell-active"
+                                  ? "grid-cell-active"
                                   : isBeat
-                                    ? "bg-muted/60 border-border/60"
-                                    : "bg-muted/30 border-border/30"
+                                    ? "bg-muted/50 border-border/50"
+                                    : "bg-muted/25 border-border/25"
                                 }
                                 ${isCurrentStep && active ? "grid-cell-playing" : ""}
-                                ${isCurrentStep && !active ? "border-secondary/40" : ""}
+                                ${isCurrentStep && !active ? "bg-accent/[0.06] border-accent/20" : ""}
                               `}
                               style={
                                 active && owner
                                   ? {
-                                    backgroundColor: owner.color + "44",
-                                    borderColor: owner.color,
-                                    boxShadow: `0 0 8px ${owner.color}55`,
+                                    backgroundColor: owner.color + "38",
+                                    borderColor: owner.color + "bb",
                                   }
                                   : active
                                     ? {
-                                      backgroundColor: "hsl(var(--primary) / 0.8)",
-                                      borderColor: "hsl(var(--primary))",
+                                      backgroundColor: "hsl(var(--primary) / 0.5)",
+                                      borderColor: "hsl(var(--primary) / 0.8)",
                                     }
                                     : undefined
                               }
@@ -623,13 +609,13 @@ const Index = () => {
                   {Array.from({ length: STEPS }, (_, i) => (
                     <div
                       key={i}
-                      className={`flex-1 text-center text-[8px] font-bold ${currentStep === i && isPlaying
-                          ? "text-secondary"
+                      className={`flex-1 text-center text-[8px] font-medium ${currentStep === i && isPlaying
+                          ? "text-accent"
                           : i % 4 === 0
-                            ? "text-muted-foreground"
-                            : "text-muted-foreground/40"
+                            ? "text-muted-foreground/70"
+                            : "text-muted-foreground/30"
                         }`}
-                      style={{ fontFamily: "Orbitron, monospace" }}
+                      style={{ fontFamily: "'JetBrains Mono', monospace" }}
                     >
                       {i + 1}
                     </div>
@@ -643,7 +629,7 @@ const Index = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.5 }}
-              className="mt-3 flex items-center justify-between text-xs text-muted-foreground border border-border rounded px-4 py-2 bg-card/30"
+              className="mt-3 shrink-0 flex items-center justify-between text-xs text-muted-foreground border border-border/50 rounded px-4 py-2 bg-card/20"
             >
               <div className="flex items-center gap-2">
                 <AnimatePresence mode="wait">
@@ -654,7 +640,7 @@ const Index = () => {
                     exit={{ opacity: 0, y: 4 }}
                     className="flex items-center gap-2"
                   >
-                    <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                     <span>
                       {connectedUsers} user
                       {connectedUsers !== 1 ? "s" : ""} connected
@@ -668,10 +654,7 @@ const Index = () => {
                   </span>
                 )}
               </div>
-              <span
-                className="tracking-widest"
-                style={{ fontFamily: "Orbitron, monospace" }}
-              >
+              <span className="tracking-widest text-[10px] text-muted-foreground/60" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
                 OBSERVER MODE
               </span>
             </motion.div>
@@ -682,7 +665,7 @@ const Index = () => {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.4 }}
-            className="lg:h-[calc(100vh-12rem)] min-h-[400px]"
+            className="h-full min-h-0"
           >
             <AgentDiscussion
               messages={messages}

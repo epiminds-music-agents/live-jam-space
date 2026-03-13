@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import type { AgentScope } from "@/hooks/useSync";
 
 export const AGENT_PERSONALITIES = [
-  { personality: "PULSE", name: "PULSE", color: "hsl(180, 100%, 50%)", description: "Steady 4-on-the-floor kicks" },
-  { personality: "GHOST", name: "GHOST", color: "hsl(300, 100%, 60%)", description: "Sparse, random high notes" },
-  { personality: "CHAOS", name: "CHAOS", color: "hsl(120, 100%, 50%)", description: "Wild random bursts everywhere" },
-  { personality: "WAVE", name: "WAVE", color: "hsl(45, 100%, 55%)", description: "Ascending arpeggio patterns" },
+  { personality: "PULSE", name: "PULSE", color: "hsl(180, 60%, 55%)", description: "Steady 4-on-the-floor kicks" },
+  { personality: "GHOST", name: "GHOST", color: "hsl(285, 55%, 65%)", description: "Sparse, random high notes" },
+  { personality: "CHAOS", name: "CHAOS", color: "hsl(142, 50%, 55%)", description: "Wild random bursts everywhere" },
+  { personality: "WAVE", name: "WAVE", color: "hsl(35, 80%, 58%)", description: "Ascending arpeggio patterns" },
 ];
 
 type AgentPanelProps = {
@@ -40,7 +40,8 @@ const AgentPanel = ({
             }}
             variant={isConnected ? "destructive" : isPending ? "secondary" : "outline"}
             size="sm"
-            className="text-[10px] tracking-wider gap-1.5 border-border hover:border-current transition-colors"
+            className="text-[10px] tracking-wider gap-1.5 border-border/60 hover:border-current transition-colors font-medium"
+            style={{ fontFamily: "'JetBrains Mono', monospace" }}
             disabled={isPending}
             style={{ color: isConnected || isPending ? undefined : p.color, opacity: isPending ? 0.8 : 1 }}
             title={p.description}

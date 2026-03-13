@@ -14,42 +14,56 @@ import {
 } from "@/hooks/useSync";
 
 const STEPS = 16;
-const ROWS = 16; // 4 rows per instrument: kick, guitar, piano, synth
+const ROWS = 16; // drums(0-3), bass(4-7), keys(8-11), lead(12-15)
 
-// TROUBLESHOOTING: Set to true to bypass all effects (distortion, reverb) and hear raw synths.
-// Compare with false to see if the "synthy" sound comes from effects or from the oscillators.
-const BYPASS_EFFECTS = false;
-// Rows 0-3: kick (low), 4-7: guitar, 8-11: piano, 12-15: synth
+// A minor pentatonic: A C D E G — pleasant in any combination
 const NOTE_NAMES = [
-  "C2", "C#2", "D2", "D#2",   // kick (main, punch, accent, ghost)
-  "E2", "G2", "B2", "E3",     // guitar (low to high)
-  "C3", "E3", "G3", "C4",     // piano
-  "G3", "A3", "C4", "E4",     // synth/default
+  "C1",  "D1",  "F#5", "A5",  // drums  (MembraneSynth uses C1/D1 for pitch; hats use F#5/A5)
+  "A2",  "C3",  "D3",  "E3",  // bass   (low sub-bass register)
+  "A3",  "C4",  "E4",  "G4",  // keys   (mid register)
+  "A4",  "C5",  "E5",  "G5",  // lead   (high register)
 ];
 const ROW_LABELS = [
-  "K1", "K2", "K3", "K4",    // Kick
-  "G1", "G2", "G3", "G4",    // Guitar
-  "P1", "P2", "P3", "P4",    // Piano
-  "S1", "S2", "S3", "S4",    // Synth
+  "KCK", "SNR", "CHH", "OHH",
+  "A2",  "C3",  "D3",  "E3",
+  "A3",  "C4",  "E4",  "G4",
+  "A4",  "C5",  "E5",  "G5",
 ];
 
 type Grid = boolean[][];
 type VelocityGrid = number[][];
 type LengthGrid = string[][];
 
-/** Instrument that can play notes and has a volume control (for mute/master). */
 type ChainSynth =
   | Tone.PolySynth<Tone.MonoSynth>
   | Tone.MembraneSynth
+  | Tone.NoiseSynth
+  | Tone.MetalSynth
   | Tone.PolySynth<Tone.Synth>;
+
+/** Drum kit — each row within PULSE maps to a distinct percussive synth. */
+type DrumKit = {
+  isDrumKit: true;
+  kick: Tone.MembraneSynth;
+  snare: Tone.NoiseSynth;
+  hhClosed: Tone.MetalSynth;
+  hhOpen: Tone.MetalSynth;
+  volume: Tone.Volume;
+};
+
 type PlayableInstrument =
   | Tone.PolySynth<Tone.Synth<Tone.SynthOptions>>
-  | { synth: ChainSynth; volume: Tone.Volume };
+  | { synth: ChainSynth; volume: Tone.Volume }
+  | DrumKit;
 
 function isChainInstrument(
   inst: PlayableInstrument
 ): inst is { synth: ChainSynth; volume: Tone.Volume } {
-  return "synth" in inst && "volume" in inst;
+  return "synth" in inst && "volume" in inst && !("isDrumKit" in inst);
+}
+
+function isDrumKit(inst: PlayableInstrument): inst is DrumKit {
+  return "isDrumKit" in inst;
 }
 
 const createEmptyGrid = (): Grid =>
@@ -128,80 +142,113 @@ const Index = () => {
     await Tone.start();
     if (synthRef.current) return;
 
-    // Default: soft sound (no beep) when no per-agent instrument is set
+    // ── Master bus ──────────────────────────────────────────────────────────
+    // All instruments → limiter → compressor → output.
+    // Limiter prevents clipping; compressor glues everything together.
+    const masterComp = new Tone.Compressor({
+      threshold: -18, ratio: 3, attack: 0.003, release: 0.25, knee: 6,
+    }).toDestination();
+    const masterLimiter = new Tone.Limiter(-3).connect(masterComp);
+
+    // ── Default fallback ─────────────────────────────────────────────────────
     const defaultSynth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "sine" },
       envelope: { attack: 0.02, decay: 0.3, sustain: 0.2, release: 0.4 },
-    }).toDestination();
-    defaultSynth.volume.value = volume;
+      volume: volume,
+    }).connect(masterLimiter);
     synthRef.current = defaultSynth;
     instrumentsRef.current.default = defaultSynth;
 
-    // PULSE: rock drum kick (MembraneSynth)
-    const kickSynth = new Tone.MembraneSynth({
-      pitchDecay: 0.05,
-      octaves: 6,
+    // ── PULSE: Drum kit (4 distinct percussion synths) ───────────────────────
+    const drumBus = new Tone.Volume(volume).connect(masterLimiter);
+
+    // Kick — deep punchy MembraneSynth with slight saturation
+    const kick = new Tone.MembraneSynth({
+      pitchDecay: 0.07, octaves: 9,
       oscillator: { type: "sine" },
-      envelope: { attack: 0.001, decay: 0.3, sustain: 0, release: 0.2 },
+      envelope: { attack: 0.001, decay: 0.38, sustain: 0, release: 0.15 },
     });
-    const kickVol = new Tone.Volume(volume).toDestination();
-    if (BYPASS_EFFECTS) {
-      kickSynth.connect(kickVol);
-    } else {
-      const kickDistortion = new Tone.Distortion({ distortion: 0.2, wet: 0.3 });
-      kickSynth.connect(kickDistortion);
-      kickDistortion.connect(kickVol);
-    }
-    instrumentsRef.current.PULSE = { synth: kickSynth, volume: kickVol };
+    const kickDist = new Tone.Distortion({ distortion: 0.3, wet: 0.4 });
+    const kickEQ = new Tone.EQ3({ low: 4, mid: -4, high: -8 });
+    kick.chain(kickDist, kickEQ, drumBus);
 
-    // WAVE: rock guitar (distorted, mid-range)
-    const guitarSynth = new Tone.PolySynth(Tone.MonoSynth, {
+    // Snare — white noise burst through bandpass + EQ
+    const snare = new Tone.NoiseSynth({
+      noise: { type: "white" },
+      envelope: { attack: 0.001, decay: 0.14, sustain: 0, release: 0.04 },
+    });
+    snare.volume.value = 3;
+    const snareFilter = new Tone.Filter({ type: "bandpass", frequency: 2800, Q: 0.9 });
+    const snareEQ = new Tone.EQ3({ low: -10, mid: 5, high: 8 });
+    snare.chain(snareFilter, snareEQ, drumBus);
+
+    // Closed hi-hat — tight MetalSynth, fast decay, high-pass filtered
+    const hhClosed = new Tone.MetalSynth({
+      frequency: 400, harmonicity: 5.1, modulationIndex: 32,
+      resonance: 4200, octaves: 1.5,
+      envelope: { attack: 0.001, decay: 0.055, release: 0.01 },
+    });
+    hhClosed.volume.value = -7;
+    const hhClosedFilter = new Tone.Filter({ type: "highpass", frequency: 8000 });
+    hhClosed.chain(hhClosedFilter, drumBus);
+
+    // Open hi-hat — same but slower decay + tiny reverb tail
+    const hhOpen = new Tone.MetalSynth({
+      frequency: 400, harmonicity: 5.1, modulationIndex: 32,
+      resonance: 4200, octaves: 1.5,
+      envelope: { attack: 0.001, decay: 0.38, release: 0.12 },
+    });
+    hhOpen.volume.value = -9;
+    const hhOpenFilter = new Tone.Filter({ type: "highpass", frequency: 7500 });
+    const hhReverb = new Tone.Reverb({ decay: 0.4, wet: 0.15 });
+    await hhReverb.generate();
+    hhOpen.chain(hhOpenFilter, hhReverb, drumBus);
+
+    instrumentsRef.current.PULSE = {
+      isDrumKit: true, kick, snare, hhClosed, hhOpen, volume: drumBus,
+    };
+
+    // ── WAVE: Synth bass (punchy pluck bass, A minor pentatonic) ─────────────
+    const bassBus = new Tone.Volume(volume).connect(masterLimiter);
+    const bass = new Tone.PolySynth(Tone.MonoSynth, {
       oscillator: { type: "sawtooth" },
-      envelope: { attack: 0.01, decay: 0.2, sustain: 0.4, release: 0.3 },
-      filter: { type: "lowpass", frequency: 2800, rolloff: -12 },
+      envelope: { attack: 0.003, decay: 0.22, sustain: 0.12, release: 0.18 },
+      filter: { type: "lowpass", frequency: 900, rolloff: -24 },
       filterEnvelope: {
-        attack: 0.01,
-        decay: 0.3,
-        sustain: 0.5,
-        release: 0.4,
-        baseFrequency: 400,
-        octaves: 2,
+        attack: 0.004, decay: 0.18, sustain: 0.25, release: 0.2,
+        baseFrequency: 180, octaves: 3.5,
       },
     });
-    const guitarVol = new Tone.Volume(volume).toDestination();
-    if (BYPASS_EFFECTS) {
-      guitarSynth.connect(guitarVol);
-    } else {
-      const guitarDistortion = new Tone.Distortion({ distortion: 0.5, wet: 0.6 });
-      const guitarReverb = new Tone.Reverb({ decay: 0.6, wet: 0.2, preDelay: 0.01 });
-      await guitarReverb.generate();
-      guitarSynth.connect(guitarDistortion);
-      guitarDistortion.connect(guitarReverb);
-      guitarReverb.connect(guitarVol);
-    }
-    instrumentsRef.current.WAVE = { synth: guitarSynth, volume: guitarVol };
+    const bassComp = new Tone.Compressor({ threshold: -22, ratio: 5, attack: 0.002, release: 0.15 });
+    bass.chain(bassComp, bassBus);
+    instrumentsRef.current.WAVE = { synth: bass, volume: bassBus };
 
-    // GHOST: piano (FM-based, no samples)
-    const pianoSynth = new Tone.PolySynth(Tone.Synth, {
+    // ── GHOST: Electric piano / keys (warm, breathy) ─────────────────────────
+    const keysBus = new Tone.Volume(volume).connect(masterLimiter);
+    const keys = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle" },
-      envelope: {
-        attack: 0.005,
-        decay: 0.4,
-        sustain: 0.3,
-        release: 0.5,
-      },
+      envelope: { attack: 0.008, decay: 0.55, sustain: 0.18, release: 0.65 },
       volume: -2,
     });
-    const pianoVol = new Tone.Volume(volume).toDestination();
-    if (BYPASS_EFFECTS) {
-      pianoSynth.connect(pianoVol);
-    } else {
-      const pianoReverb = new Tone.Reverb({ decay: 1.2, wet: 0.35, preDelay: 0.02 });
-      await pianoReverb.generate();
-      pianoSynth.connect(pianoReverb);
-      pianoReverb.connect(pianoVol);
-    }
-    instrumentsRef.current.GHOST = { synth: pianoSynth, volume: pianoVol };
+    const keysReverb = new Tone.Reverb({ decay: 2.2, wet: 0.3, preDelay: 0.015 });
+    await keysReverb.generate();
+    const keysChorus = new Tone.Chorus(3.5, 2.5, 0.45).start();
+    keys.chain(keysChorus, keysReverb, keysBus);
+    instrumentsRef.current.GHOST = { synth: keys, volume: keysBus };
+
+    // ── CHAOS: Bright lead synth with delay (A minor pentatonic, high) ────────
+    const leadBus = new Tone.Volume(volume - 2).connect(masterLimiter);
+    const lead = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "pulse", width: 0.3 } as Tone.OmniOscillatorOptions,
+      envelope: { attack: 0.006, decay: 0.18, sustain: 0.55, release: 0.75 },
+      volume: -4,
+    });
+    const leadFilter = new Tone.Filter({ type: "lowpass", frequency: 4200, rolloff: -12 });
+    const leadDelay = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.28, wet: 0.22 });
+    const leadReverb = new Tone.Reverb({ decay: 1.6, wet: 0.22, preDelay: 0.01 });
+    await leadReverb.generate();
+    lead.chain(leadFilter, leadDelay, leadReverb, leadBus);
+    instrumentsRef.current.CHAOS = { synth: lead, volume: leadBus };
   }, [volume]);
 
   const startSequencer = useCallback(async () => {
@@ -226,27 +273,32 @@ const Index = () => {
         const instruments = instrumentsRef.current;
         const agreement = activeAgreementRef.current;
 
-        // When only one agent is PULSE, use slap bass for all rows (robust across servers)
-        const onlyPulse =
-          scopes.length === 1 &&
-          scopes[0].name?.toUpperCase() === "PULSE";
         for (let row = 0; row < ROWS; row++) {
           if (!g[row][step]) continue;
           const owner = scopes.find(
             (a) => row >= a.scopeStart && row <= a.scopeEnd
           );
-          const key = onlyPulse
-            ? "PULSE"
-            : owner?.name
-              ? owner.name.toUpperCase()
-              : "default";
+          const key = owner?.name ? owner.name.toUpperCase() : "default";
           const inst = instruments[key] ?? instruments.default;
           if (!inst) continue;
-          const synth = isChainInstrument(inst) ? inst.synth : inst;
           const baseVelocity = Math.max(0.05, Math.min(1, vg[row]?.[step] ?? 0.8));
           const velocity = Math.max(0.05, Math.min(1, baseVelocity * getAccentMultiplier(step, agreement?.accentPattern)));
           const length = lg[row]?.[step] || agreement?.noteLength || "16n";
-          synth.triggerAttackRelease(NOTE_NAMES[row], length, time, velocity);
+          const note = NOTE_NAMES[row];
+
+          if (isDrumKit(inst)) {
+            // Route to the correct percussive synth based on position within the drum section
+            const drumRow = row % 4; // 0=kick, 1=snare, 2=closed HH, 3=open HH
+            switch (drumRow) {
+              case 0: inst.kick.triggerAttackRelease(note, length, time, velocity); break;
+              case 1: inst.snare.triggerAttackRelease(length, time, velocity); break;
+              case 2: inst.hhClosed.triggerAttackRelease("16n", time, velocity); break;
+              case 3: inst.hhOpen.triggerAttackRelease("8n", time, velocity); break;
+            }
+          } else {
+            const synth = isChainInstrument(inst) ? inst.synth : inst;
+            synth.triggerAttackRelease(note, length, time, velocity);
+          }
         }
       },
       Array.from({ length: STEPS }, (_, i) => i),
@@ -282,11 +334,13 @@ const Index = () => {
       synthRef.current.volume.value = v;
     }
     const instruments = instrumentsRef.current;
-    for (const name of ["PULSE", "WAVE", "GHOST"] as const) {
+    for (const name of ["PULSE", "WAVE", "GHOST", "CHAOS"] as const) {
       const inst = instruments[name];
-      if (inst && isChainInstrument(inst)) {
-        const vol = inst.volume as { volume: { value: number } };
-        vol.volume.value = v;
+      if (!inst) continue;
+      if (isDrumKit(inst)) {
+        inst.volume.volume.value = v;
+      } else if (isChainInstrument(inst)) {
+        inst.volume.volume.value = v;
       }
     }
   }, [volume, isMuted]);
